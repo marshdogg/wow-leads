@@ -1,8 +1,14 @@
 node_modules
 .next
+.next-*
+out
+build
+.env
 .env*.local
 .vercel
 .DS_Store
+*.tsbuildinfo
+next-env.d.ts
 playwright-report
 test-results
 screenshots

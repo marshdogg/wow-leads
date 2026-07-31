@@ -1,0 +1,181 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   WOW Leads design tokens.
+   Values are final-intent from the v3 prototype — do not round or "improve"
+   them. Every token is exposed through @theme so Tailwind generates utilities
+   (bg-card, text-dim, border-hover, …) and so the raw custom property stays
+   available for inline styles and arbitrary values.
+--------------------------------------------------------------------------- */
+
+@theme {
+  /* Surfaces */
+  --color-page: #0d0f0d;
+  --color-rail: #0a0c0a;
+  --color-panel: #111411;
+  --color-raised: #141814;
+  --color-card: #181c17;
+  --color-tablebar: #0e110e;
+  --color-aitint: #0f130e;
+
+  /* Borders */
+  --color-hairline: #191d18;
+  --color-subtle: #1f231e;
+  --color-line: #23271f;
+  --color-cardline: #262b25;
+  --color-hover: #3b423a;
+  --color-hoverstrong: #3d4a37;
+  --color-active: #4b9c2d;
+
+  /* Green (brand) */
+  --color-green: #7ed321;
+  --color-greenhover: #93e63a;
+  --color-greentext: #b6f07a;
+  --color-greenchip: #a8ea6b;
+  --color-greentoggle: #d5f8a8;
+  --color-greendeep: #101a0b;
+  --color-greendeep2: #0f1a0b;
+  --color-greendeep3: #1f2f16;
+  --color-greenborder: #2f6b1f;
+
+  /* Amber — revival / on-hold */
+  --color-amber: #d8b45e;
+  --color-amberbg: #2b2413;
+  --color-amberborder: #4a3a17;
+  --color-amberalt: #e0a52b;
+
+  /* Red — overdue */
+  --color-reddot: #e07a68;
+  --color-redtext: #f0a294;
+  --color-redbg: #1e100e;
+  --color-redborder: #5c2620;
+  --color-redrail: #8c3a30;
+
+  /* Blue — account-type tags */
+  --color-blue: #7fb2e0;
+  --color-bluebg: #16283a;
+
+  /* Text */
+  --color-ink: #e9ede9;
+  --color-inkstrong: #e2e7e2;
+  --color-inksecondary: #c6cdc6;
+  --color-inkmuted: #98a298;
+  --color-inkdim: #7d877d;
+  --color-inkfaint: #6f7a6f;
+  --color-inkdisabled: #5c655c;
+  --color-inkoff: #4f584f;
+
+  /* Misc semantic */
+  --color-dormant: #c9a29a;
+  --color-railidle: #252b23;
+  --color-nav: #93a08d;
+
+  /* Type */
+  --font-sans: var(--font-poppins), Poppins, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), "IBM Plex Mono", ui-monospace, monospace;
+
+  /* Radius */
+  --radius-chip: 4px;
+  --radius-chiplg: 5px;
+  --radius-seg: 7px;
+  --radius-inner: 8px;
+  --radius-innerlg: 9px;
+  --radius-control: 10px;
+  --radius-card: 11px;
+  --radius-stat: 12px;
+  --radius-panel: 14px;
+
+  /* Animation */
+  --animate-wowfade: wowFade 0.22s ease;
+  --animate-wowpulse: wowPulse 1.6s ease-in-out infinite;
+}
+
+/* Non-color tokens components read directly. */
+:root {
+  --gutter: 28px;
+  --rhythm: 18px;
+  --col-gap: 15px;
+  --card-pad: 14px;
+  --card-stack-gap: 11px;
+  --control-gap: 10px;
+  --col-width: 306px;
+  --rail-width: 252px;
+}
+
+@keyframes wowFade {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes wowPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--color-page);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: #8fdc4a;
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--color-greenchip);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2c312c;
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+button {
+  font-family: inherit;
+}
+
+/* The prototype's motion is deliberately restrained, so honouring the platform
+   reduced-motion setting costs nothing. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
