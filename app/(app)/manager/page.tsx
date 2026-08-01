@@ -36,13 +36,10 @@ export default async function ManagerPage() {
   ]);
 
   return (
+    // Gutter matches the top bar's `px-4 sm:px-7`.
     <div
-      style={{
-        flex: 1,
-        minHeight: 600,
-        overflowY: "auto",
-        padding: "18px 28px 32px",
-      }}
+      className="px-4 pt-[18px] pb-8 sm:px-7"
+      style={{ flex: 1, minHeight: 600, overflowY: "auto" }}
     >
       <div style={{ display: "flex", alignItems: "baseline", gap: 14 }}>
         <h1
@@ -62,14 +59,10 @@ export default async function ManagerPage() {
 
       <NeglectedPanel rows={neglected} total={neglectedValue} />
 
+      {/* Stacks below md — effort above, outcomes below. */}
       <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1.15fr 1fr",
-          gap: 18,
-          marginTop: 18,
-          alignItems: "start",
-        }}
+        className="grid grid-cols-1 md:grid-cols-[1.15fr_1fr]"
+        style={{ gap: 18, marginTop: 18, alignItems: "start" }}
       >
         <DashPanel>
           <Leaderboard rows={leaderboard} />

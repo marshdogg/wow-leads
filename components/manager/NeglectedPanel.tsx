@@ -3,7 +3,6 @@ import { neglectRuleCopy } from "./neglect";
 import { NudgeButton } from "./NudgeButton";
 import { neglectedTotal, type NeglectedRow } from "./rows";
 
-const GRID = "1.5fr 1fr 0.9fr 0.9fr 0.8fr 120px";
 
 /**
  * What is being dropped. This panel is first on the page and painted in the
@@ -57,13 +56,20 @@ export function NeglectedPanel({
         </div>
       </div>
 
+      {/*
+        Six columns at desk width; a stack on a phone. The four middle cells
+        sit in a wrapper that is `display: contents` at md and above, so the
+        grid still sees them as its own children and the desktop layout is
+        untouched — below md the wrapper becomes a wrapping meta line. Squeezed
+        into 322px the six tracks collide into each other, and a neglected-deal
+        list that is unreadable is worse than no list.
+      */}
       {rows.map((n) => (
         <div
           key={n.id}
           data-testid={`neglected-row-${n.id}`}
+          className="grid grid-cols-1 md:grid-cols-[1.5fr_1fr_0.9fr_0.9fr_0.8fr_120px]"
           style={{
-            display: "grid",
-            gridTemplateColumns: GRID,
             alignItems: "center",
             gap: 12,
             padding: "13px 18px",
@@ -83,19 +89,23 @@ export function NeglectedPanel({
               {n.account}
             </div>
           </div>
-          <div style={{ color: "#c6cdc6" }}>{n.pipeline}</div>
-          <div style={{ color: "#98a298" }}>{n.stage}</div>
-          <div
-            style={{
-              fontFamily: "var(--font-plex-mono), 'IBM Plex Mono', monospace",
-              color: "#e2e7e2",
-            }}
-          >
-            {n.value}
+
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 md:contents">
+            <div style={{ color: "#c6cdc6" }}>{n.pipeline}</div>
+            <div style={{ color: "#98a298" }}>{n.stage}</div>
+            <div
+              style={{
+                fontFamily: "var(--font-plex-mono), 'IBM Plex Mono', monospace",
+                color: "#e2e7e2",
+              }}
+            >
+              {n.value}
+            </div>
+            <div style={{ fontWeight: 600, color: "#f0a294" }}>
+              {n.days}d silent
+            </div>
           </div>
-          <div style={{ fontWeight: 600, color: "#f0a294" }}>
-            {n.days}d silent
-          </div>
+
           <NudgeButton dealId={n.id} dealName={n.name} />
         </div>
       ))}

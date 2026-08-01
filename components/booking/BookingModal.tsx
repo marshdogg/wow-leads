@@ -185,7 +185,9 @@ export default function BookingModal({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        padding: 32,
+        // 32px of gutter costs a 390px phone a fifth of its width. Scale it
+        // down there and keep the designed value from tablet up.
+        padding: "clamp(14px, 4vw, 32px)",
       }}
     >
       <div
@@ -193,6 +195,9 @@ export default function BookingModal({
         data-step={step}
         style={{
           width: 660,
+          // Flex-shrink already does this, but stating it means the modal
+          // cannot overflow if the overlay ever stops being a flex container.
+          maxWidth: "100%",
           maxHeight: "100%",
           overflowY: "auto",
           background: "#111411",

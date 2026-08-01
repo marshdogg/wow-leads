@@ -27,13 +27,11 @@ export function RecordScreen({ view }: { view: RecordView }) {
   const contacts = orderedContacts(view.contacts);
 
   return (
+    // Gutter matches the top bar's `px-4 sm:px-7`; 28px each side of a 390px
+    // phone is most of the screen.
     <div
-      style={{
-        flex: 1,
-        minHeight: 600,
-        overflowY: "auto",
-        padding: "16px 28px 32px",
-      }}
+      className="px-4 pt-4 pb-8 sm:px-7"
+      style={{ flex: 1, minHeight: 600, overflowY: "auto" }}
     >
       <Link
         href="/board"
@@ -115,14 +113,11 @@ export function RecordScreen({ view }: { view: RecordView }) {
         />
       </div>
 
+      {/* Stacks below md. `grid-template-columns` lives in the class, not the
+          style object, so the responsive variant isn't overridden inline. */}
       <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1.4fr 1fr",
-          gap: 18,
-          marginTop: 22,
-          alignItems: "start",
-        }}
+        className="grid grid-cols-1 md:grid-cols-[1.4fr_1fr]"
+        style={{ gap: 18, marginTop: 22, alignItems: "start" }}
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
           <ContactsPanel dealId={deal.id} contacts={contacts} />
