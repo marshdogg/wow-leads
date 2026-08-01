@@ -27,8 +27,11 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en">
-      <body className={`${poppins.variable} ${plexMono.variable}`}>
+    // The font variables go on <html>, not <body>: Tailwind's @theme emits
+    // --font-sans at :root, so --font-poppins has to be defined there too or
+    // the whole value is invalid and the stack silently falls back.
+    <html lang="en" className={`${poppins.variable} ${plexMono.variable}`}>
+      <body>
         <NuqsAdapter>{children}</NuqsAdapter>
       </body>
     </html>

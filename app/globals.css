@@ -71,8 +71,11 @@
   --color-nav: #93a08d;
 
   /* Type */
-  --font-sans: var(--font-poppins), Poppins, ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-plex-mono), "IBM Plex Mono", ui-monospace, monospace;
+  /* The fallback inside var() matters: if next/font's variable is ever missing
+     at :root the whole declaration would otherwise be invalid, and the stack
+     would silently degrade to the system font. */
+  --font-sans: var(--font-poppins, Poppins), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono, "IBM Plex Mono"), ui-monospace, monospace;
 
   /* Radius */
   --radius-chip: 4px;

@@ -25,6 +25,8 @@ const eslintConfig = [
     ignores: [
       "node_modules/**",
       ".next/**",
+      // Per-agent dist dirs from the parallel build (see next.config.ts).
+      ".next-*/**",
       "out/**",
       "build/**",
       "next-env.d.ts",
