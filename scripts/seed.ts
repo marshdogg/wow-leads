@@ -17,6 +17,7 @@ import type { PgTable, PgUpdateSetSource } from "drizzle-orm/pg-core";
 import * as schema from "@/db/schema";
 import { LOCATIONS, SWITCHABLE_USERS } from "@/lib/current-user";
 import { APPROVAL_FIXTURES } from "@/lib/fixtures/approvals";
+import { TEMPLATE_FIXTURES } from "@/lib/fixtures/templates";
 import {
   AGENT_ID_BY_OWNER_NAME,
   DEAL_FIXTURES,
@@ -284,26 +285,18 @@ const sequenceStepRows = [
       {
         label: "Intro email",
         channel: "EMAIL",
-        template:
-          "Short intro naming an adjacent job we finished, and the one-day turnaround. Ask for ten minutes.",
       },
       {
         label: "Day 3 phone call",
         channel: "CALL",
-        template:
-          "Reference the intro email. Ask what repaint scope is coming in the next two quarters.",
       },
       {
         label: "Info packet drop",
         channel: "VISIT",
-        template:
-          "Drop the reference list and trade-sequencing one-pager at the site office.",
       },
       {
         label: "Final follow-up email",
         channel: "EMAIL",
-        template:
-          "Last touch. Offer a walk-through slot, then close the sequence if there is no reply.",
       },
     ],
   },
@@ -313,8 +306,6 @@ const sequenceStepRows = [
       {
         label: "Warm intro email",
         channel: "EMAIL",
-        template:
-          "Name the mutual contact, explain what kind of work we send back, propose coffee.",
       },
       {
         label: "Follow-up call",
@@ -329,8 +320,6 @@ const sequenceStepRows = [
       {
         label: "Terms + co-marketing proposal",
         channel: "EMAIL",
-        template:
-          "Send referral terms and the co-marketing proposal for signature.",
       },
     ],
   },
@@ -342,7 +331,6 @@ const sequenceStepRows = [
     label: step.label,
     channel: step.channel,
     delayDays: SEQUENCE_CADENCE[i],
-    template: step.template,
   })),
 );
 
@@ -972,6 +960,29 @@ const canvassTargetRows = [
   },
 ];
 
+/**
+ * Shipped template rows. `order` becomes `updatedAt` — same-scope siblings are
+ * separated by it, richest first, so a template naming more facts is preferred
+ * whenever the record can supply them.
+ */
+const templateRows = TEMPLATE_FIXTURES.map((t) => ({
+  id: t.id,
+  name: t.name,
+  channel: t.channel,
+  triggerType: t.triggerType,
+  pipelineId: t.pipelineId,
+  stageId: t.stageId,
+  track: t.track,
+  subject: t.subject,
+  body: t.body,
+  active: t.active,
+  allowAiAdaptation: t.allowAiAdaptation ?? false,
+  isDefault: t.isDefault,
+  authoredBy: null,
+  createdAt: NOW,
+  updatedAt: new Date(NOW.getTime() - t.order * 1000),
+}));
+
 /* -------------------------------------------------------------------------
    Run
    ------------------------------------------------------------------------- */
@@ -1219,6 +1230,16 @@ async function main() {
     console.log(`Removed ${orphanRows.length} account(s) with no deal.`);
   }
 
+  // Only the shipped rows are touched. A franchise's own templates are their
+  // work and are never overwritten by a re-seed.
+  await db
+    .insert(schema.templates)
+    .values(templateRows)
+    .onConflictDoUpdate({
+      target: schema.templates.id,
+      set: overwrite(schema.templates, ["id", "createdAt"]),
+    });
+
   await db
     .insert(schema.canvassTargets)
     .values(canvassTargetRows)
@@ -1301,6 +1322,7 @@ async function main() {
     union all select 'promos', count(*)::int from promos
     union all select 'deals', count(*)::int from deals
     union all select 'touchpoints', count(*)::int from touchpoints
+    union all select 'templates', count(*)::int from templates
     union all select 'canvass_targets', count(*)::int from canvass_targets
     union all select 'approvals', count(*)::int from approvals
     union all select 'audit_events', count(*)::int from audit_events

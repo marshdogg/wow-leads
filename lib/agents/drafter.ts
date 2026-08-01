@@ -48,5 +48,9 @@ export function channelFor(contact: ContactFacts): ContactChannel {
 }
 
 export { ClaudeDrafter } from "./claude-drafter";
-export { TemplateDrafter, renderTemplate } from "./template-drafter";
+export {
+  TemplateDrafter,
+  draftFromTemplates,
+  resolveForRequest,
+} from "./template-drafter";
 export * from "./types";

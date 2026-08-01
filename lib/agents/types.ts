@@ -1,5 +1,6 @@
 import type { ContactChannel } from "@/lib/types";
 import type { AgentId, TriggerFacts } from "@/lib/triggers/types";
+import type { MessageTemplate, TemplateQuery } from "@/lib/templates/types";
 
 /**
  * Drafting contract.
@@ -22,6 +23,10 @@ export interface Sender {
 
 export interface DraftRequest {
   facts: TriggerFacts;
+  /** The franchise's templates. Empty means nothing can be drafted. */
+  templates: MessageTemplate[];
+  /** Scope the resolver matches against. */
+  query: TemplateQuery;
   /** The WHY THIS FIRED bullets. The draft must be consistent with these. */
   reasons: string[];
   /** Chosen from the contact's stated preference. */
@@ -35,11 +40,30 @@ export interface DraftResult {
   body: string;
   /** Which drafter produced it — surfaced in the audit trail. */
   source: DraftSource;
+  /** The template it came from, for the provenance trail. */
+  templateId: string;
+  subject: string | null;
+}
+
+/**
+ * Why nothing was drafted. A franchise that deletes its templates gets no
+ * drafts — our copy must not reappear from a hardcoded fallback, because the
+ * whole point of the feature is that they own the words.
+ */
+export interface DraftSkipped {
+  skipped: true;
+  reason: string;
+}
+
+export type DraftOutcome = DraftResult | DraftSkipped;
+
+export function isSkipped(outcome: DraftOutcome): outcome is DraftSkipped {
+  return "skipped" in outcome;
 }
 
 export interface Drafter {
   readonly id: string;
-  draft(request: DraftRequest): Promise<DraftResult>;
+  draft(request: DraftRequest): Promise<DraftOutcome>;
 }
 
 /** The agent identity a drafted approval is attributed to. */

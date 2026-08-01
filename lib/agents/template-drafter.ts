@@ -1,23 +1,16 @@
-import {
-  completionPhrase,
-  monthDay,
-  monthName,
-  nextWeekdaySlot,
-  recentSendPhrase,
-  seasonName,
-  weekdayName,
-} from "@/lib/triggers/dates";
-import { proximityClause } from "@/lib/triggers/record-parse";
-import { joinList, lowerFirst, unpunctuated } from "@/lib/triggers/text";
+import { renderTemplate, resolveTemplate } from "@/lib/templates/resolve";
+import { buildTemplateFacts } from "./template-facts";
 import type {
-  ElevenMonthFacts,
-  NeighbourCampaignFacts,
-  NeverQuotedFacts,
-  RevivalFacts,
-  SeasonalFacts,
-  SequenceFacts,
-} from "@/lib/triggers/types";
-import type { DraftRequest, DraftResult, Drafter, Sender } from "./types";
+  DraftOutcome,
+  DraftRequest,
+  DraftSkipped,
+  Drafter,
+} from "./types";
+import type {
+  MessageTemplate,
+  RenderedTemplate,
+  TemplateFacts,
+} from "@/lib/templates/types";
 
 /**
  * The deterministic drafter.
@@ -39,278 +32,52 @@ import type { DraftRequest, DraftResult, Drafter, Sender } from "./types";
 export class TemplateDrafter implements Drafter {
   readonly id = "template";
 
-  async draft(request: DraftRequest): Promise<DraftResult> {
-    return { body: renderTemplate(request), source: "template" };
+  async draft(request: DraftRequest): Promise<DraftOutcome> {
+    return draftFromTemplates(request);
   }
-}
-
-export function renderTemplate(request: DraftRequest): string {
-  const { facts, sender } = request;
-  switch (facts.kind) {
-    case "eleven_month":
-      return elevenMonthBody(facts, sender);
-    case "seasonal":
-      return seasonalBody(facts, sender);
-    case "revival":
-      return revivalBody(facts, sender);
-    case "sequence":
-      return sequenceBody(facts, sender);
-    case "neighbour_campaign":
-      return neighbourBody(facts, sender);
-    case "never_quoted":
-      return neverQuotedBody(facts, sender);
-    case "speed_to_lead":
-      // Speed-to-lead never drafts a customer message — it raises an internal
-      // alert. Reaching here means the runner routed an escalation down the
-      // drafting path, which the `outcome` discriminator exists to prevent.
-      throw new Error(
-        "speed_to_lead has no customer-facing draft: it is an internal escalation.",
-      );
-  }
-}
-
-/* -------------------------------------------------------------------------
-   11-month warranty
-   ------------------------------------------------------------------------- */
-
-function elevenMonthBody(f: ElevenMonthFacts, sender: Sender): string {
-  const first = f.contact.firstName;
-  const parts: string[] = [`Hi ${first} — ${sender.firstName} at ${sender.company}.`];
-
-  const when = f.jobCompletedAt
-    ? ` we finished ${completionPhrase(f.jobCompletedAt, f.now)}`
-    : " we did for you";
-  parts.push(
-    `Your one-year warranty inspection is coming up on the ${f.scope.workType} work${when}.`,
-  );
-
-  if (f.scope.areas.length > 0) {
-    parts.push(
-      `It is a good moment to touch up the ${joinList(f.scope.areas)} zones that take the most traffic.`,
-    );
-  } else {
-    parts.push(
-      "It is a good moment to walk the job and catch anything worth touching up while the warranty is live.",
-    );
-  }
-
-  parts.push("Want me to bring an estimator by in the next couple of weeks?");
-  return parts.join(" ");
-}
-
-/* -------------------------------------------------------------------------
-   Seasonal promo
-   ------------------------------------------------------------------------- */
-
-function seasonalBody(f: SeasonalFacts, _sender: Sender): string {
-  const first = f.contact.firstName;
-  const sent = f.promoSentAt ? ` we sent ${recentSendPhrase(f.promoSentAt, f.now)}` : "";
-  const parts: string[] = [
-    `Hi ${first} — checking in on the ${f.promoShortLabel} offer${sent}.`,
-  ];
-
-  const holds = f.promoExpiresAt
-    ? `It holds until ${monthDay(f.promoExpiresAt)}`
-    : "The offer is still open";
-  const covers =
-    f.scopeAreas.length > 0
-      ? ` and covers the ${joinList(f.scopeAreas)} we talked through${f.priorJobPhrase ? ` ${f.priorJobPhrase}` : ""}`
-      : "";
-  parts.push(`${holds}${covers}.`);
-
-  // Offering "a Monday slot" in a message that opens "we sent Monday" reads
-  // like a template. Step a day on when the two collide.
-  let slot = nextWeekdaySlot(f.now);
-  if (f.promoSentAt && slot.getDay() === f.promoSentAt.getDay()) {
-    slot = nextWeekdaySlot(f.now, 4);
-  }
-  parts.push(`Happy to hold a ${weekdayName(slot)} slot if that helps you decide.`);
-
-  return parts.join(" ");
-}
-
-/* -------------------------------------------------------------------------
-   Revival
-   ------------------------------------------------------------------------- */
-
-function revivalBody(f: RevivalFacts, sender: Sender): string {
-  const first = f.contact.firstName;
-  const parts: string[] = [`Hi ${first} — ${sender.firstName} at ${sender.company}.`];
-
-  const at = f.originalValue ? ` at ${f.originalValue}` : "";
-  const when = f.lostAt ? ` back in ${monthName(f.lostAt)}` : "";
-  parts.push(
-    `We quoted your ${lowerFirst(unpunctuated(f.originalScope))}${at}${when} and price was the sticking point.`,
-  );
-
-  parts.push(
-    `Our ${seasonName(f.now)} schedule has room, and I can put a tighter phased option in front of you.`,
-  );
-  parts.push("Worth a ten-minute call this week?");
-
-  return parts.join(" ");
-}
-
-/* -------------------------------------------------------------------------
-   Sequence step
-   ------------------------------------------------------------------------- */
-
-function sequenceBody(f: SequenceFacts, sender: Sender): string {
-  return f.stepNumber === 1
-    ? sequenceIntroBody(f, sender)
-    : sequenceFollowUpBody(f, sender);
-}
-
-function sequenceIntroBody(f: SequenceFacts, sender: Sender): string {
-  const parts: string[] = [
-    `${f.contact.firstName} — ${sender.firstName} with ${sender.company}.`,
-  ];
-
-  if (f.reference) {
-    parts.push(
-      `We finished ${f.workType} work on ${f.reference.proof}, one-day turnarounds on occupied buildings.`,
-    );
-  } else {
-    parts.push(
-      `We run one-day ${f.workType} turnarounds on occupied buildings — crews in and out inside a shift.`,
-    );
-  }
-
-  const project = f.projectHint ? ` on ${f.projectHint}` : "";
-  parts.push(
-    `If ${f.accountShortName} has repaint scope coming${project}, I would like ten minutes to show you how we sequence around trades.`,
-  );
-
-  return parts.join(" ");
-}
-
-function sequenceFollowUpBody(f: SequenceFacts, sender: Sender): string {
-  const parts: string[] = [`${f.contact.firstName} — ${sender.firstName} again.`];
-
-  if (f.previousStepAt) {
-    parts.push(
-      `Following up on the note I sent ${recentSendPhrase(f.previousStepAt, f.now)}.`,
-    );
-  } else {
-    parts.push(`Following up on my earlier note.`);
-  }
-
-  if (f.reference) {
-    parts.push(
-      `${f.reference.name} is an active account of ours on ${f.workType} work if you want a reference before we talk.`,
-    );
-  }
-
-  const project = f.projectHint ? f.projectHint : "your upcoming repaint scope";
-  parts.push(
-    `Still worth ten minutes on ${project}? I can work around your trade schedule.`,
-  );
-
-  return parts.join(" ");
-}
-
-/* -------------------------------------------------------------------------
-   Neighbour campaign
-   ------------------------------------------------------------------------- */
-
-/**
- * The reference:
- *
- *   Hi — Marshall at WOW 1 DAY PAINTING. We just finished the exterior at
- *   2308 Tunlaw Rd NW, two doors down from you. The crew is in the
- *   neighbourhood through Friday, so if you have been thinking about your
- *   trim I can have an estimator take a look while we are already here.
- *
- * Two things this must not do. It must not name the recipient, because a
- * canvassed address has no contact on file and inventing one is worse than
- * an unaddressed opener. And it must not claim to know anything about
- * *their* house — "if you have been thinking about your exterior" is a
- * conditional; "your trim is looking tired" would be a fabrication about
- * property nobody has looked at.
- */
-function neighbourBody(f: NeighbourCampaignFacts, sender: Sender): string {
-  const greeting = f.contact.firstName ? `Hi ${f.contact.firstName}` : "Hi";
-  const parts: string[] = [`${greeting} — ${sender.firstName} at ${sender.company}.`];
-
-  const where = f.proximity ? `, ${proximityClause(f.proximity)}` : " nearby";
-  parts.push(`We just finished the ${f.scope.workType} at ${f.jobAddress}${where}.`);
-
-  const stillHere =
-    f.crewOnSiteUntil && f.crewOnSiteUntil.getTime() >= f.now.getTime()
-      ? `The crew is in the neighbourhood through ${weekdayName(f.crewOnSiteUntil)}, so if`
-      : "If";
-  parts.push(
-    `${stillHere} you have been thinking about your ${f.scope.workType} I can have an estimator take a look while we are already here.`,
-  );
-
-  return parts.join(" ");
-}
-
-/* -------------------------------------------------------------------------
-   Never quoted
-   ------------------------------------------------------------------------- */
-
-/**
- * The reference:
- *
- *   Hi Adaeze — Marshall at WOW 1 DAY PAINTING. You asked about interior work
- *   back in June last year and I do not think we ever got you a proper number.
- *   If it is still on your list I can have someone take a look and price it
- *   properly this time.
- *
- * Three things this template must get right, and each is a way the other
- * templates would go wrong here:
- *
- * 1. **Reference the enquiry, never a job or a quote.** There isn't one.
- * 2. **Match the opener to how we actually met them.** "You asked about" is
- *    false for someone whose hand we shook at a home show; "we met" is false
- *    for a landing-page form. The channel decides the first clause.
- * 3. **Say we dropped it.** "I do not think we ever got you a proper number"
- *    is the sentence that makes the rest credible. Reaching out after
- *    fourteen months as though nothing happened invites the obvious question;
- *    answering it first is disarming, and it is also simply true.
- */
-function neverQuotedBody(f: NeverQuotedFacts, sender: Sender): string {
-  const parts: string[] = [
-    `Hi ${f.contact.firstName} — ${sender.firstName} at ${sender.company}.`,
-  ];
-
-  // The event opener already contains an "and" ("we met … and talked about"),
-  // so a bare second one stacks two conjunctions in a row. Comma it instead.
-  const opener = enquiryOpener(f);
-  const join = / and /.test(opener) ? ", and" : " and";
-  parts.push(`${opener}${join} I do not think we ever got you a proper number.`);
-  parts.push(
-    "If it is still on your list I can have someone take a look and price it properly this time.",
-  );
-
-  return parts.join(" ");
 }
 
 /**
- * The opening clause, built from the channel and whatever the record knows
- * about when and what. Every branch is a true sentence about a different
- * shape of record; none of them assert a date that was never captured.
+ * Resolve a template for this record and fill it.
+ *
+ * Returns a skip rather than a fallback when nothing is eligible. That is a
+ * deliberate refusal: a franchise that has deleted or narrowed its templates
+ * must get no drafts, not ours quietly reappearing under their name. The
+ * runner reports the skip so the silence is visible instead of mysterious.
  */
-function enquiryOpener(f: NeverQuotedFacts): string {
-  const about = f.enquiredAbout ? `${f.enquiredAbout} work` : "getting some painting done";
-  const when = f.enquiredAt ? ` ${enquiryWhen(f.enquiredAt, f.now)}` : "";
+export function draftFromTemplates(request: DraftRequest): DraftOutcome {
+  const resolution = resolveForRequest(request);
+  if ("skipped" in resolution) return resolution;
 
-  switch (f.enquiryChannel) {
-    case "event":
-      // No date needed: "we met at the home show" is already the when.
-      return `We met at the ${f.sourceLabel.toLowerCase()} and talked about ${about}`;
-    case "phone":
-      return `You called us about ${about}${when}`;
-    case "web":
-      return `You asked about ${about}${when}`;
-    case "unknown":
-      return `You got in touch about ${about}${when}`;
-  }
+  return {
+    body: resolution.rendered.body,
+    subject: resolution.rendered.subject,
+    templateId: resolution.rendered.templateId,
+    source: "template",
+  };
 }
 
-/** "back in June last year" · "back in June". */
-function enquiryWhen(enquiredAt: Date, now: Date): string {
-  const suffix = enquiredAt.getFullYear() < now.getFullYear() ? " last year" : "";
-  return `back in ${monthName(enquiredAt)}${suffix}`;
+export interface TemplateResolution {
+  template: MessageTemplate;
+  facts: TemplateFacts;
+  rendered: RenderedTemplate;
+}
+
+/** Shared by both drafters: pick the template, fill it, keep the parts. */
+export function resolveForRequest(
+  request: DraftRequest,
+): TemplateResolution | DraftSkipped {
+  const facts = buildTemplateFacts(request.facts, request.sender);
+  const template = resolveTemplate(request.templates, request.query, facts);
+
+  if (!template) {
+    return {
+      skipped: true,
+      reason: request.templates.length
+        ? "No template matched this record — every candidate needed a fact the record does not have"
+        : "No templates configured for this franchise",
+    };
+  }
+
+  return { template, facts, rendered: renderTemplate(template, facts) };
 }

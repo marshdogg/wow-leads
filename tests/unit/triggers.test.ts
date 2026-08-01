@@ -33,7 +33,60 @@ import {
   severityFor,
 } from "@/lib/triggers";
 import { humaniseDays, humaniseMinutes } from "@/lib/triggers/text";
-import { renderTemplate } from "@/lib/agents/template-drafter";
+import { draftFromTemplates } from "@/lib/agents/template-drafter";
+import { TEMPLATE_FIXTURES } from "@/lib/fixtures/templates";
+import type { MessageTemplate } from "@/lib/templates/types";
+
+/**
+ * The shipped rows as the resolver sees them. Same source the seed inserts,
+ * so a test cannot pass against copy the database does not actually hold.
+ * `order` becomes `updatedAt` — it is what breaks ties between siblings of
+ * equal specificity, richest first.
+ */
+const DEFAULT_TEMPLATES: MessageTemplate[] = TEMPLATE_FIXTURES.map((t) => ({
+  ...t,
+  authoredBy: null,
+  updatedAt: new Date(2026, 0, 1 + (100 - t.order)),
+}));
+import type { TriggerFacts } from "@/lib/triggers/types";
+import type { PipelineId, StageId, TrackId } from "@/lib/types";
+
+/**
+ * Draft through the real path: resolve a shipped template against these facts
+ * and render it. Copy now lives in template rows, so this is what proves the
+ * migration out of string literals did not reword anything.
+ */
+function renderTemplate(request: {
+  facts: TriggerFacts;
+  reasons: string[];
+  channel: "SMS" | "EMAIL" | "PHONE";
+  sender: typeof DEFAULT_SENDER;
+  pipelineId?: PipelineId;
+  stageId?: StageId;
+  track?: TrackId | null;
+}): string {
+  const outcome = draftFromTemplates({
+    facts: request.facts,
+    reasons: request.reasons,
+    channel: request.channel,
+    sender: request.sender,
+    templates: DEFAULT_TEMPLATES,
+    query: {
+      triggerType:
+        request.facts.kind === "speed_to_lead"
+          ? "speed_to_lead"
+          : request.facts.kind,
+      pipelineId: request.pipelineId ?? "resi",
+      stageId: request.stageId ?? "past",
+      track: request.track ?? null,
+      channel: request.channel,
+    },
+  });
+  if ("skipped" in outcome) {
+    throw new Error(`No template resolved: ${outcome.reason}`);
+  }
+  return outcome.body;
+}
 import { DEFAULT_SENDER } from "@/lib/agents/types";
 import {
   completionEvent,
@@ -1035,18 +1088,49 @@ describe("what reaches the Approvals queue", () => {
     }
   });
 
-  it("refuses to draft a customer message for an internal escalation", () => {
-    // Belt and braces behind the discriminator: if a future runner ever routes
-    // an escalation into the drafting path, it fails loudly rather than
-    // sending a half-formed alert to a homeowner.
-    expect(() =>
-      renderTemplate({
-        facts: speedToLead(),
-        reasons: [],
+  it("has no customer template for an internal escalation, so nothing drafts", () => {
+    // Belt and braces behind the discriminator: even if a future runner routed
+    // an escalation down the drafting path, no template is scoped to
+    // speed_to_lead, so it resolves to nothing rather than sending a
+    // half-formed alert to a homeowner.
+    const outcome = draftFromTemplates({
+      facts: speedToLead(),
+      reasons: [],
+      channel: "SMS",
+      sender: DEFAULT_SENDER,
+      templates: DEFAULT_TEMPLATES,
+      query: {
+        triggerType: "speed_to_lead",
+        pipelineId: "newleads",
+        stageId: "new",
+        track: null,
         channel: "SMS",
-        sender: DEFAULT_SENDER,
-      }),
-    ).toThrow(/internal escalation/);
+      },
+    });
+    expect("skipped" in outcome).toBe(true);
+  });
+
+  it("drafts nothing at all when a franchise has no templates", () => {
+    // The refusal that makes the feature honest: our copy must not reappear
+    // from a hardcoded fallback under someone else's name.
+    const outcome = draftFromTemplates({
+      facts: elevenMonth(),
+      reasons: [],
+      channel: "SMS",
+      sender: DEFAULT_SENDER,
+      templates: [],
+      query: {
+        triggerType: "eleven_month",
+        pipelineId: "resi",
+        stageId: "past",
+        track: "repeat",
+        channel: "SMS",
+      },
+    });
+    expect("skipped" in outcome).toBe(true);
+    if ("skipped" in outcome) {
+      expect(outcome.reason).toContain("No templates configured");
+    }
   });
 
   it("has a label and an outcome for every trigger type", () => {
@@ -1220,13 +1304,14 @@ describe("never-quoted copy", () => {
       sender: DEFAULT_SENDER,
     });
 
-  it("matches the reference for a dated web enquiry", () => {
-    expect(draft(neverQuoted())).toBe(
-      "Hi Adaeze — Marshall at WOW 1 DAY PAINTING. You asked about interior work " +
-        "back in June last year and I do not think we ever got you a proper number. " +
-        "If it is still on your list I can have someone take a look and price it " +
-        "properly this time.",
-    );
+  it("uses the dated opener when the record captured a date", () => {
+    // Behaviour, not the exact sentence: the copy is franchise-owned now, and
+    // asserting its wording here would duplicate the byte-identical checks
+    // that belong beside the template rows — and break every time somebody
+    // legitimately edits them.
+    const body = draft(neverQuoted());
+    expect(body).toContain("back in June last year");
+    expect(body).toContain("I do not think we ever got you a proper number");
   });
 
   it("opens with meeting them, not with them asking, when we met in person", () => {
@@ -1238,22 +1323,27 @@ describe("never-quoted copy", () => {
         enquiredAbout: "exterior",
       }),
     );
-    expect(body).toContain("We met at the home show and talked about exterior work");
-    // "you asked" would be false about someone whose hand we shook.
+    expect(body).toContain("We met at the home show");
+    // "you asked" would be false about someone whose hand we shook, and
+    // "got in touch" is the wrong verb for a conversation at a stand.
     expect(body).not.toContain("You asked");
-    // And no stacked conjunctions where the opener already has one.
-    expect(body).not.toContain("work and I do not think");
+    expect(body).not.toContain("You got in touch");
   });
 
   it("never states a date the record did not capture", () => {
     const body = draft(neverQuoted({ enquiredAt: null, enquiryChannel: "web" }));
-    expect(body).not.toMatch(/back in/);
-    expect(body).toContain("You asked about interior work and I do not think");
+    // The dated template is ineligible without `enquiry.month`, so the
+    // resolver falls through to one that claims no date at all. That
+    // fall-through is the guarantee — not which sentence catches it.
+    expect(body).not.toMatch(/back in|June|last year/);
+    expect(body).toContain("I do not think we ever got you a proper number");
   });
 
-  it("keeps the scope general when none was captured", () => {
+  it("still drafts when no scope was captured", () => {
     const body = draft(neverQuoted({ enquiredAbout: null }));
-    expect(body).toContain("getting some painting done");
+    expect(body).toContain("I do not think we ever got you a proper number");
+    // Nothing invented about a house nobody has looked at.
+    expect(body).not.toMatch(/interior|exterior|trim|siding/i);
   });
 
   it("names the gap rather than pretending the silence did not happen", () => {

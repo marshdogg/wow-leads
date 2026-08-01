@@ -1,22 +1,34 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { monthDay, monthYear } from "@/lib/triggers/dates";
-import type { TriggerFacts } from "@/lib/triggers/types";
-import { renderTemplate } from "./template-drafter";
-import type { DraftRequest, DraftResult, Drafter } from "./types";
+import { resolveForRequest } from "./template-drafter";
+import type {
+  DraftOutcome,
+  DraftRequest,
+  DraftResult,
+  Drafter,
+} from "./types";
 
 /**
  * The AI drafter.
  *
- * It is a strict upgrade over `TemplateDrafter`, never a dependency: it is
- * only selected when `ANTHROPIC_API_KEY` is set, and on any error, any empty
- * response, or any output that fails validation it falls back to the template
- * silently. A trigger firing must never depend on a network call succeeding.
+ * Since copy moved into franchise-authored templates, this no longer writes a
+ * message from scratch. **The template is the message.** Claude is only
+ * allowed to adapt it, only when the template's author has ticked
+ * `allowAiAdaptation`, and only in ways that preserve every concrete claim.
  *
- * The model is given *only* facts read off the record and the same reasoning
- * bullets the human will see on the right of the approval card. It is told,
- * in the strongest terms the prompt can carry, not to add anything that is
- * not in that list — because the human approving the draft is trusting that
- * the message and the bullets describe the same reality.
+ * Why the default is off: a franchise writes a template because they want
+ * *those words* sent. Letting a model paraphrase means what reaches the
+ * customer is not what they approved. The eligibility rule stops Claude
+ * inventing a *fact*, but it does nothing about altered *meaning* — softening
+ * a warranty qualifier, or turning "I can hold a Thursday slot" into a firmer
+ * promise than anyone authorised. Those are the failure modes in this domain
+ * and they are all reachable with a perfectly accurate fact list.
+ *
+ * Where adaptation is switched on, it is bounded rather than trusted: the
+ * output must still contain every value that was interpolated into the
+ * template — dates, prices, addresses, names. That is checkable, and checked.
+ * Anything that fails falls back to the rendered template, as does any error,
+ * empty response or missing key. A trigger firing never depends on a network
+ * call succeeding.
  */
 
 export const DRAFT_MODEL = "claude-sonnet-5";
@@ -28,26 +40,24 @@ const MAX_BODY_CHARS = 700;
 /** Unfilled-placeholder tells. Any of these means the draft is unusable. */
 const PLACEHOLDER_PATTERNS = [
   /\[[^\]]{2,40}\]/, // [name], [address]
-  /\{\{?[^}]{2,40}\}?\}/, // {name}, {{name}}
+  /\{\{?[^}]{2,40}\}?\}/, // an unrendered {{token}}
   /\b(?:XX+|TBD|FIRSTNAME|LASTNAME|INSERT )\b/i,
 ];
 
-const SYSTEM_PROMPT = `You write outreach messages for WOW 1 DAY PAINTING, a residential and commercial painting company. A human reads every message you write and approves it before it sends, so it has to be something they would be happy to have gone out under their own name.
+const SYSTEM_PROMPT = `You adapt approved outreach copy for WOW 1 DAY PAINTING, a residential and commercial painting company.
 
-Write the message body only. No subject line, no greeting block, no signature, no quotation marks around it, no commentary about what you wrote.
+You are given a message that a franchise owner has already written and approved, already filled in with this customer's details. Your job is to adapt it to read naturally for this specific record — not to rewrite it, and not to write a new one.
 
-The register, which is not negotiable:
-- First person, as the named sender writing to the named recipient. "Marshall at WOW 1 DAY PAINTING", not "the team at WOW".
-- Specific to this actual job. Name the real rooms, the real dates, the real dollar figures, the real deadline. A message that would read the same for a different customer is a failure.
-- One clear ask at the end, phrased as a question a person can answer in a sentence.
-- Zero marketing language. No "we're excited", no "reach out", no "don't miss out", no exclamation marks, no emoji, no superlatives about the company.
-- Plain, warm, direct. Short sentences. Contractions are fine in SMS; write EMAIL slightly more fully.
-- 2 to 4 sentences for SMS, 3 to 5 for EMAIL.
+What you may change: sentence order, connective phrasing, contractions, and the greeting, so the message reads like a person wrote it to this person rather than a form letter.
 
-The absolute rule: every concrete claim in your message must come from the FACTS list you are given. Do not invent a room, a date, a price, a discount, a name, a past conversation, or a promise about scheduling. If a fact you would like is not in the list, write around it. Inventing detail here means a customer receives a false statement about their own home.
+What you may not change, under any circumstances:
+- Any date, price, percentage, address, room, name, or deadline. These appear in the message because a record contains them. Reproduce every one exactly as written.
+- Any commitment or qualifier. "I can hold a Thursday slot" is an offer; do not make it a booking. "If it is still on your list" is a condition; do not drop it. Warranty and guarantee wording is legal language — reproduce it verbatim.
+- The ask. One clear ask, the same one the template makes.
 
-Reference example of the target register:
-Hi Delia — Marshall at WOW 1 DAY PAINTING. Your one-year warranty inspection is coming up on the interior work we finished last August. It is a good moment to touch up the hallway and stairwell zones that take the most traffic. Want me to bring an estimator by in the next couple of weeks?`;
+You may not add anything. No new claims about their property, no urgency that was not there, no marketing language, no exclamation marks, no emoji.
+
+Output the adapted message body only. No preamble, no quotation marks, no commentary.`;
 
 export class ClaudeDrafter implements Drafter {
   readonly id = "claude";
@@ -57,28 +67,65 @@ export class ClaudeDrafter implements Drafter {
     private readonly model: string = DRAFT_MODEL,
   ) {}
 
-  async draft(request: DraftRequest): Promise<DraftResult> {
+  async draft(request: DraftRequest): Promise<DraftOutcome> {
+    const resolution = resolveForRequest(request);
+    if ("skipped" in resolution) return resolution;
+
+    const { template, facts, rendered } = resolution;
+    const asWritten: DraftResult = {
+      body: rendered.body,
+      subject: rendered.subject,
+      templateId: rendered.templateId,
+      source: "template",
+    };
+
+    // The author's decision, not ours.
+    if (!template.allowAiAdaptation) return asWritten;
+
+    // The values that must survive adaptation, taken from what was actually
+    // interpolated rather than guessed from the prose.
+    const mustKeep = rendered.usedTokens
+      .map((token) => facts[token])
+      .filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+
     try {
       const response = await this.client.messages.create(
         {
           model: this.model,
           max_tokens: 700,
           system: SYSTEM_PROMPT,
-          // Short, scoped copy task on a cron path — keep it cheap and fast.
           output_config: { effort: "low" },
-          messages: [{ role: "user", content: buildUserPrompt(request) }],
+          messages: [
+            {
+              role: "user",
+              content: buildUserPrompt(request, rendered.body, mustKeep),
+            },
+          ],
         },
         { timeout: 20_000 },
       );
 
       const body = extractText(response);
-      if (isUsable(body)) return { body, source: "claude" };
+      if (isUsable(body) && preservesFacts(body, mustKeep)) {
+        return { ...asWritten, body, source: "claude" };
+      }
     } catch {
-      // Network, auth, rate limit, refusal — all resolve the same way. The
-      // trigger still fires and the human still gets a draft to approve.
+      // Network, auth, rate limit, refusal — all resolve the same way.
     }
-    return { body: renderTemplate(request), source: "template" };
+    return asWritten;
   }
+}
+
+/**
+ * Every interpolated value must still be present, verbatim.
+ *
+ * This is what makes adaptation a bounded risk rather than a hopeful one. A
+ * model that drops "$5,600" or rewrites "August 15" as "mid-August" fails
+ * here and the approved copy goes instead. It cannot catch a softened
+ * qualifier — nothing automated can — which is why adaptation stays opt-in.
+ */
+export function preservesFacts(body: string, mustKeep: string[]): boolean {
+  return mustKeep.every((value) => body.includes(value));
 }
 
 function extractText(response: Anthropic.Message): string {
@@ -87,8 +134,7 @@ function extractText(response: Anthropic.Message): string {
     .map((block) => block.text)
     .join("")
     .trim();
-  // Models occasionally wrap the body in quotes despite the instruction.
-  return text.replace(/^["“']|["”']$/g, "").trim();
+  return text.replace(/^["\u201c']|["\u201d']$/g, "").trim();
 }
 
 function isUsable(body: string): boolean {
@@ -97,167 +143,27 @@ function isUsable(body: string): boolean {
 }
 
 /**
- * The facts the model is allowed to use, and nothing else. Kept as a flat
- * labelled list rather than JSON so that "everything here is true, nothing
- * else is" reads as an instruction rather than a schema.
+ * The approved message, the values that must survive, and the reasoning the
+ * human will see beside it. Deliberately not the raw fact list any more —
+ * Claude is adapting a message, not composing one from parts.
  */
-export function buildUserPrompt(request: DraftRequest): string {
-  const { facts, reasons, channel, sender } = request;
-  const lines = [
-    `CHANNEL: ${channel}`,
-    `SENDER: ${sender.name} (${sender.firstName}) at ${sender.company}`,
-    `RECIPIENT: ${facts.contact.name} (${facts.contact.firstName})`,
-    ...factLines(facts),
-  ];
-
+export function buildUserPrompt(
+  request: DraftRequest,
+  approvedBody: string,
+  mustKeep: string[],
+): string {
   return [
-    "FACTS — the only things you may state:",
-    ...lines.map((line) => `- ${line}`),
+    `CHANNEL: ${request.channel}`,
     "",
-    "WHY THIS TRIGGER FIRED — the human approving this will see these bullets beside your message, so it must be consistent with them:",
-    ...reasons.map((reason) => `- ${reason}`),
+    "APPROVED MESSAGE — adapt this, do not replace it:",
+    approvedBody,
     "",
-    `Write the ${channel} message body now.`,
+    "MUST APPEAR UNCHANGED IN YOUR OUTPUT:",
+    ...mustKeep.map((value) => `- ${value}`),
+    "",
+    "WHY THIS IS BEING SENT — the human approving it sees these beside your message, so stay consistent with them:",
+    ...request.reasons.map((reason) => `- ${reason}`),
+    "",
+    `Write the adapted ${request.channel} message body now.`,
   ].join("\n");
-}
-
-function factLines(facts: TriggerFacts): string[] {
-  switch (facts.kind) {
-    case "eleven_month": {
-      const lines = [
-        "TRIGGER: 11-month warranty inspection is due",
-        `WORK DONE: ${facts.scope.summary}`,
-      ];
-      if (facts.jobCompletedAt)
-        lines.push(`JOB COMPLETED: ${monthYear(facts.jobCompletedAt)}`);
-      if (facts.scope.value) lines.push(`JOB VALUE: ${facts.scope.value}`);
-      if (facts.scope.areas.length > 0)
-        lines.push(
-          `ROOMS AND AREAS IN THE ORIGINAL JOB: ${facts.scope.areas.join(", ")}`,
-        );
-      if (facts.completionFollowUpAt)
-        lines.push(
-          `LAST CONTACT: completion follow-up, ${monthYear(facts.completionFollowUpAt)}`,
-        );
-      lines.push(
-        "THE ASK: offer to bring an estimator by for the warranty inspection in the next couple of weeks",
-      );
-      return lines;
-    }
-
-    case "seasonal": {
-      const lines = [
-        "TRIGGER: a live promotional offer is going unanswered and is about to expire",
-        `OFFER: ${facts.promoLabel}`,
-      ];
-      if (facts.promoSentAt) lines.push(`OFFER SENT: ${monthDay(facts.promoSentAt)}`);
-      if (facts.promoExpiresAt)
-        lines.push(`OFFER EXPIRES: ${monthDay(facts.promoExpiresAt)}`);
-      lines.push(`REPLIED: no${facts.opened ? " (opened, no reply)" : " (not opened)"}`);
-      if (facts.scopeAreas.length > 0)
-        lines.push(`AREAS THE OFFER COVERS: ${facts.scopeAreas.join(", ")}`);
-      if (facts.priorJobNotes.length > 0)
-        lines.push(`PRIOR JOB HISTORY: ${facts.priorJobNotes.join("; ")}`);
-      if (facts.priorJobPhrase)
-        lines.push(`WHEN THE PRIOR JOB WAS DISCUSSED: ${facts.priorJobPhrase}`);
-      lines.push(
-        "THE ASK: offer to hold an estimate slot this week so they can decide before the offer expires",
-      );
-      return lines;
-    }
-
-    case "revival": {
-      const lines = [
-        "TRIGGER: a deal lost on price has finished its six-month cooling period",
-        `SCOPE THAT WAS QUOTED AND NEVER DONE: ${facts.originalScope}`,
-      ];
-      if (facts.originalValue) lines.push(`ORIGINAL QUOTE: ${facts.originalValue}`);
-      if (facts.lostReason) lines.push(`WHY IT WAS LOST: ${facts.lostReason}`);
-      if (facts.lostAt) lines.push(`WHEN IT WAS LOST: ${monthYear(facts.lostAt)}`);
-      lines.push(
-        "WHAT WE CAN OFFER: current schedule has room, and the work can be phased to bring the number down",
-        "THE ASK: a ten-minute call this week",
-        "TONE NOTE: acknowledge the price objection directly. Do not apologise for it and do not pretend the earlier conversation did not happen.",
-      );
-      return lines;
-    }
-
-    case "sequence": {
-      const lines = [
-        `TRIGGER: step ${facts.stepNumber} of ${facts.totalSteps} in the ${facts.sequenceName} sequence is due`,
-        `THIS STEP: ${facts.stepLabel}`,
-        `PROSPECT COMPANY: ${facts.accountName} (say "${facts.accountShortName}" mid-sentence)`,
-        `WORK TYPE THEY ARE A FIT FOR: ${facts.workType}`,
-      ];
-      if (facts.accountTags.length > 0)
-        lines.push(`ACCOUNT TAGS: ${facts.accountTags.join(", ")}`);
-      if (facts.projectHint)
-        lines.push(`A PROJECT OF THEIRS WE KNOW ABOUT: ${facts.projectHint}`);
-      if (facts.reference)
-        lines.push(
-          `REFERENCE WE CAN NAME: ${facts.reference.name}, an active ${facts.reference.relation} account — ${facts.reference.proof}`,
-        );
-      lines.push(
-        "WHAT WE ARE KNOWN FOR: one-day turnarounds on occupied buildings, sequencing around other trades",
-        facts.stepNumber === 1
-          ? "THE ASK: ten minutes of their time"
-          : "THE ASK: still ten minutes of their time, referencing the earlier note without repeating it",
-      );
-      return lines;
-    }
-
-    case "neighbour_campaign": {
-      const lines = [
-        "TRIGGER: we just finished a job on this street and the crew is still nearby",
-        `THE JOB WE CAN POINT AT: ${facts.scope.workType} work at ${facts.jobAddress}`,
-      ];
-      if (facts.jobCompletedAt)
-        lines.push(`FINISHED: ${monthDay(facts.jobCompletedAt)}`);
-      if (facts.proximity)
-        lines.push(`HOW CLOSE THEY ARE TO IT: ${facts.proximity}`);
-      if (facts.crewName) lines.push(`CREW: ${facts.crewName}`);
-      if (facts.crewOnSiteUntil)
-        lines.push(`CREW ON SITE UNTIL: ${monthDay(facts.crewOnSiteUntil)}`);
-      lines.push(
-        "RECIPIENT NAME: unknown — this is a canvassed address, so open without a name rather than inventing one",
-        "YOU KNOW NOTHING ABOUT THEIR HOUSE. Do not describe its condition, its colour, or its trim. Phrase the offer as a conditional about what they might have been considering.",
-        "THE ASK: an estimator takes a look while the crew is already on the street",
-      );
-      return lines;
-    }
-
-    case "never_quoted": {
-      const lines = [
-        "TRIGGER: this person gave us their details and we never sent them a quote",
-        `HOW THEY REACHED US: ${facts.sourceLabel} (${facts.enquiryChannel})`,
-      ];
-      if (facts.enquiredAt) lines.push(`WHEN THEY ENQUIRED: ${monthYear(facts.enquiredAt)}`);
-      else
-        lines.push(
-          "WHEN THEY ENQUIRED: not captured — do not state or imply a date",
-        );
-      if (facts.enquiredAbout)
-        lines.push(`WHAT THEY ASKED ABOUT: ${facts.enquiredAbout} work`);
-      else
-        lines.push(
-          "WHAT THEY ASKED ABOUT: not captured — keep it general, do not name a room or a surface",
-        );
-      lines.push(
-        "THERE IS NO JOB AND NO QUOTE. Do not reference past work, a previous price, a discount, or a warranty — none exist for this person.",
-        facts.enquiryChannel === "event"
-          ? "OPENER: we met them in person at the event. Do not write 'you asked' or 'you got in touch'."
-          : "OPENER: they contacted us. Do not write 'we met'.",
-        "ACKNOWLEDGE THE GAP: say plainly that we never got back to them with a number. Do not apologise at length and do not explain why.",
-        "THE ASK: send someone to look and price it properly",
-      );
-      return lines;
-    }
-
-    case "speed_to_lead":
-      // An internal alert has no customer-facing draft. The `outcome`
-      // discriminator keeps the runner from ever calling a drafter with it.
-      throw new Error(
-        "speed_to_lead has no customer-facing draft: it is an internal escalation.",
-      );
-  }
 }

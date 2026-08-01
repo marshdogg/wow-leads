@@ -78,8 +78,20 @@ export interface StageConfig {
  * Rail grouping. Re-marketing and New Leads are both residential — one works
  * people we've already served, the other people we haven't — so they sit
  * together under one heading rather than as peers of the commercial pipelines.
+ *
+ * Deliberately an open string, not a union: a franchise adds its own headings
+ * (a review-request programme, a cross-sell push) without a deploy, the same
+ * way stages are rows rather than enum members. The rail derives the headings
+ * and their order from the pipelines it is handed, so nothing has to be
+ * registered in code first.
  */
-export type PipelineCategory = "RESIDENTIAL LEADS" | "COMMERCIAL";
+export type PipelineCategory = string;
+
+/** The two we ship. Others come from the database. */
+export const SEEDED_CATEGORIES = {
+  residential: "RESIDENTIAL LEADS",
+  commercial: "COMMERCIAL",
+} as const;
 
 export interface PipelineConfig {
   id: PipelineId;

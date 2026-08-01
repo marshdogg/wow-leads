@@ -7,6 +7,17 @@ import {
   staleDays,
 } from "@/lib/fixtures/time";
 import { PIPELINE_IDS, PIPES } from "@/lib/pipelines";
+import {
+  TEMPLATE_FIXTURES,
+  type TemplateFixture,
+} from "@/lib/fixtures/templates";
+import {
+  renderTemplate,
+  resolveTemplate,
+  tokensIn,
+  unknownTokens,
+} from "@/lib/templates/resolve";
+import type { MessageTemplate } from "@/lib/templates/types";
 import type { PipelineId } from "@/lib/types";
 import {
   AGENT_NAMES,
@@ -566,6 +577,134 @@ describe("fixture integrity", () => {
   it("covers every pipeline", () => {
     for (const pipe of PIPELINE_IDS) {
       expect(DEAL_FIXTURES.some((d) => d.pipe === pipe)).toBe(true);
+    }
+  });
+});
+
+
+describe("shipped message templates", () => {
+  const asTemplate = (f: TemplateFixture): MessageTemplate => ({
+    ...f,
+    authoredBy: null,
+    // The seed derives updatedAt from `order`, richest first. Mirrored here so
+    // these tests resolve the same way the database does.
+    updatedAt: new Date(Date.now() - f.order * 1000),
+  });
+
+  const ALL = TEMPLATE_FIXTURES.map(asTemplate);
+
+  it("uses no token the registry does not define", () => {
+    // An authoring typo makes a template permanently ineligible and silent —
+    // it is simply never chosen. Catching it here is the difference between a
+    // failed test and a trigger that mysteriously stops drafting.
+    for (const t of ALL) expect({ id: t.id, unknown: unknownTokens(t) }).toEqual({
+      id: t.id,
+      unknown: [],
+    });
+  });
+
+  it("ships every trigger that drafts a customer message", () => {
+    const covered = new Set(ALL.map((t) => t.triggerType));
+    expect(covered).toEqual(
+      new Set([
+        "eleven_month",
+        "seasonal",
+        "revival",
+        "sequence",
+        "neighbour_campaign",
+        "never_quoted",
+      ]),
+    );
+    // speed_to_lead is an internal escalation, not a message. It must not
+    // acquire a template, or something will try to send it to a customer.
+    expect(covered.has("speed_to_lead")).toBe(false);
+  });
+
+  it("orders same-scope siblings richest first", () => {
+    // Siblings share a scope, so `specificity` ties and `updatedAt` decides.
+    // If two ever shared an `order` the winner would be arbitrary.
+    const families = new Map<string, number[]>();
+    for (const f of TEMPLATE_FIXTURES) {
+      const key = `${f.triggerType}:${f.pipelineId}:${f.stageId}:${f.track}`;
+      families.set(key, [...(families.get(key) ?? []), f.order]);
+    }
+    for (const [key, orders] of families) {
+      expect({ key, unique: new Set(orders).size }).toEqual({
+        key,
+        unique: orders.length,
+      });
+    }
+  });
+
+  it("falls back through the 11-month family as facts drop away", () => {
+    const query = {
+      triggerType: "eleven_month",
+      pipelineId: "resi",
+      stageId: "past",
+      track: "repeat",
+      channel: "SMS",
+    } as const;
+    const rich = {
+      "contact.firstName": "Delia",
+      "sender.firstName": "Marshall",
+      "sender.company": "WOW 1 DAY PAINTING",
+      "job.workType": "interior",
+      "job.completedMonth": "last August",
+      "job.areas": "hallway and stairwell",
+    };
+
+    expect(resolveTemplate(ALL, query, rich)?.id).toBe("tpl-eleven-month-full");
+    expect(
+      resolveTemplate(ALL, query, { ...rich, "job.areas": null })?.id,
+    ).toBe("tpl-eleven-month-dated");
+    expect(
+      resolveTemplate(ALL, query, {
+        ...rich,
+        "job.areas": null,
+        "job.completedMonth": null,
+      })?.id,
+    ).toBe("tpl-eleven-month-base");
+    // Nothing to say truthfully means nothing goes out.
+    expect(
+      resolveTemplate(ALL, query, { "contact.firstName": "Delia" }),
+    ).toBeNull();
+  });
+
+  it("renders the reference copy the drafter produces", () => {
+    const facts = {
+      "contact.firstName": "Delia",
+      "sender.firstName": "Marshall",
+      "sender.company": "WOW 1 DAY PAINTING",
+      "job.workType": "interior",
+      "job.completedMonth": "last August",
+      "job.areas": "hallway and stairwell",
+    };
+    const template = ALL.find((t) => t.id === "tpl-eleven-month-full")!;
+    expect(renderTemplate(template, facts).body).toBe(
+      "Hi Delia — Marshall at WOW 1 DAY PAINTING. Your one-year warranty " +
+        "inspection is coming up on the interior work we finished last August. " +
+        "It is a good moment to touch up the hallway and stairwell zones that " +
+        "take the most traffic. Want me to bring an estimator by in the next " +
+        "couple of weeks?",
+    );
+  });
+
+  it("never names the recipient in a neighbour campaign", () => {
+    // A canvassed address has no contact on file. Inventing a name is worse
+    // than an unaddressed opener, and these go to real front doors.
+    for (const t of ALL.filter((x) => x.triggerType === "neighbour_campaign")) {
+      expect(tokensIn(t)).not.toContain("contact.firstName");
+    }
+  });
+
+  it("ships every default as send-as-written", () => {
+    // Whether a model may paraphrase is the franchise's call about their own
+    // copy, so ours default to off.
+    for (const t of ALL) {
+      expect({ id: t.id, ai: t.allowAiAdaptation }).toEqual({
+        id: t.id,
+        ai: false,
+      });
     }
   });
 });

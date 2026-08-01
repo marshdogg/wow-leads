@@ -1,0 +1,1 @@
+ALTER TABLE "templates" ADD COLUMN "allow_ai_adaptation" boolean DEFAULT false NOT NULL;

@@ -43,6 +43,18 @@ export interface MessageTemplate {
 
   active: boolean;
   /**
+   * Whether the AI drafter may adapt this copy, or must send it as written.
+   *
+   * Defaults to false — off. A franchise authors a template because they want
+   * *those words* to go out; letting a model paraphrase hands that choice back
+   * to us. The approval queue catches an obviously wrong message, but the rep
+   * approving it is not the person who wrote the template and will not notice
+   * a softened warranty qualifier or a conditional quietly turned into a
+   * commitment. So the decision belongs to whoever owns the copy, per
+   * template, rather than being a global switch we pick for them.
+   */
+  allowAiAdaptation?: boolean;
+  /**
    * True for the copy we ship. A franchise editing a default forks it into
    * their own row rather than mutating ours, so an upgrade can still improve
    * the shipped defaults without silently overwriting someone's rewrite.

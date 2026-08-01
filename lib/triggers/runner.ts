@@ -1,15 +1,27 @@
 import { db } from "@/db";
 import { approvals } from "@/db/schema";
 import { channelFor, channelLabel, getDrafter, hasApiKey } from "@/lib/agents/drafter";
-import { DEFAULT_SENDER, type DraftSource } from "@/lib/agents/types";
+import {
+  DEFAULT_SENDER,
+  isSkipped,
+  type DraftSkipped,
+  type DraftSource,
+} from "@/lib/agents/types";
 import { appendAudit } from "@/lib/repositories/audit";
+import { getTemplates } from "@/lib/repositories/templates";
 import {
   markCanvassTarget,
   setAiPending,
   setNextAction,
 } from "@/lib/repositories/deals";
 import { logTouchpoint } from "@/lib/repositories/touchpoints";
-import type { TriggerType } from "@/lib/types";
+import type { MessageTemplate } from "@/lib/templates/types";
+import type {
+  PipelineId,
+  StageId,
+  TrackId,
+  TriggerType,
+} from "@/lib/types";
 import { isSameDay, startOfDay } from "./dates";
 import {
   elevenMonthFacts,
@@ -97,7 +109,12 @@ const RUNNERS: TriggerRunner[] = [
 export interface CandidateOutcome {
   dealId: string;
   dealName: string;
-  outcome: "eligible" | "not-eligible" | "suppressed" | "duplicate";
+  outcome:
+    | "eligible"
+    | "not-eligible"
+    | "suppressed"
+    | "duplicate"
+    | "no-template";
   reasons: string[];
 }
 
@@ -113,6 +130,8 @@ export interface TriggerRunSummary {
   suppressed: number;
   /** Held back because a draft already exists for today. */
   duplicate: number;
+  /** Eligible, but no template the record could fill. */
+  skipped: number;
   approvalIds: string[];
   /**
    * Per-candidate explanation, populated on a dry run. The predicates already
@@ -134,6 +153,8 @@ export interface RunSummary {
 export interface RunOptions {
   /** Injectable clock. */
   now?: Date;
+  /** Override the template set — the repository read, or a test's fixtures. */
+  templates?: MessageTemplate[];
   /** Evaluate and report without writing anything. */
   dryRun?: boolean;
 }
@@ -153,12 +174,25 @@ export async function runAllTriggers(options: RunOptions = {}): Promise<RunSumma
     startOfDay(now),
   );
 
+  // Franchise-authored copy, unfiltered: `resolveTemplate` needs to see
+  // inactive and non-matching rows to reach the same decision the Templates
+  // screen previews. A franchise with none simply gets no drafts.
+  const templates = options.templates ?? (await getTemplates());
+
   const drafter = getDrafter();
   const triggers: TriggerRunSummary[] = [];
 
   for (const runner of RUNNERS) {
     triggers.push(
-      await runOne(runner, ctx, suppressions, escalations, drafter, options),
+      await runOne(
+        runner,
+        ctx,
+        suppressions,
+        escalations,
+        drafter,
+        templates,
+        options,
+      ),
     );
   }
 
@@ -176,6 +210,7 @@ async function runOne(
   suppressions: SuppressionIndex,
   escalations: Map<string, EscalationRecord[]>,
   drafter: ReturnType<typeof getDrafter>,
+  templates: MessageTemplate[],
   options: RunOptions,
 ): Promise<TriggerRunSummary> {
   const summary: TriggerRunSummary = {
@@ -185,6 +220,7 @@ async function runOne(
     created: 0,
     suppressed: 0,
     duplicate: 0,
+    skipped: 0,
     approvalIds: [],
     ...(options.dryRun ? { candidates: [] } : null),
   };
@@ -241,9 +277,20 @@ async function runOne(
         continue;
       }
 
-      const approvalId = await createApproval(facts, evaluation.reasons, drafter);
+      const created = await createApproval(
+        facts,
+        deal,
+        evaluation.reasons,
+        drafter,
+        templates,
+      );
+      if ("skipped" in created) {
+        summary.skipped += 1;
+        note("no-template", [created.reason]);
+        continue;
+      }
       summary.created += 1;
-      summary.approvalIds.push(approvalId);
+      summary.approvalIds.push(created.approvalId);
     }
   }
 
@@ -300,18 +347,37 @@ function candidateIdentity(facts: TriggerFacts): string | null {
 
 async function createApproval(
   facts: TriggerFacts,
+  deal: DealRow,
   reasons: string[],
   drafter: ReturnType<typeof getDrafter>,
-): Promise<string> {
+  templates: MessageTemplate[],
+): Promise<{ approvalId: string } | DraftSkipped> {
   const presentation = describeTrigger(facts);
   const channel = channelFor(facts.contact);
 
-  const { body, source } = await drafter.draft({
+  const outcome = await drafter.draft({
     facts,
     reasons,
     channel,
     sender: DEFAULT_SENDER,
+    templates,
+    query: {
+      triggerType: presentation.triggerType,
+      pipelineId: deal.pipelineId as PipelineId,
+      stageId: deal.stageId as StageId,
+      track: (deal.track as TrackId | null) ?? null,
+      channel,
+    },
   });
+
+  // A franchise with no eligible template gets no draft. Reported, not
+  // silently replaced with copy of ours.
+  if (isSkipped(outcome)) return outcome;
+
+  // `subject` is deliberately dropped: `approvals` has no column for it, so an
+  // email subject a franchise authors would be silently discarded rather than
+  // shown. Flagged for a schema field rather than faked into the body.
+  const { body, source, templateId } = outcome;
 
   const id = `apr-${crypto.randomUUID()}`;
   await db.insert(approvals).values({
@@ -360,10 +426,11 @@ async function createApproval(
       channel: channelLabel(facts.contact),
       reasons,
       drafter: source,
+      templateId,
     },
   });
 
-  return id;
+  return { approvalId: id };
 }
 
 /**

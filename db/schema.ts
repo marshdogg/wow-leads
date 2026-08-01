@@ -182,7 +182,6 @@ export const sequenceSteps = pgTable(
     channel: text("channel").notNull().default("EMAIL"),
     /** Days after the previous step. */
     delayDays: integer("delay_days").notNull().default(3),
-    template: text("template").notNull().default(""),
   },
   (t) => [
     uniqueIndex("sequence_steps_order_idx").on(t.sequenceId, t.stepNumber),
@@ -301,6 +300,65 @@ export const deals = pgTable(
     index("deals_account_idx").on(t.accountId),
     index("deals_last_touch_idx").on(t.lastTouchAt),
     index("deals_sourced_from_idx").on(t.sourcedFromDealId),
+  ],
+);
+
+/* -------------------------------------------------------------------------
+   Message templates
+   ------------------------------------------------------------------------- */
+
+/**
+ * The copy a draft is built from, owned by the franchise rather than the
+ * codebase. Mirrors `MessageTemplate` in `lib/templates/types.ts`.
+ *
+ * Every scope column is nullable and a null means "any", which *widens* the
+ * template — so the narrowest matching row wins. The rows we ship carry
+ * `is_default`; a franchise editing one forks it into a row of their own
+ * rather than mutating ours, so a later release can still improve the shipped
+ * copy without silently overwriting somebody's rewrite.
+ */
+export const templates = pgTable(
+  "templates",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    /** SMS | EMAIL | PHONE | ANY */
+    channel: text("channel").notNull().default("ANY"),
+
+    triggerType: text("trigger_type"),
+    pipelineId: text("pipeline_id").references(() => pipelines.id),
+    stageId: text("stage_id").references(() => stages.id),
+    track: text("track"),
+
+    /** Email only; ignored for SMS. */
+    subject: text("subject"),
+    /** The copy, with `{{variable}}` placeholders. */
+    body: text("body").notNull(),
+
+    active: boolean("active").notNull().default(true),
+    /**
+     * Whether the AI drafter may adapt this copy or must send it as written.
+     * Off by default: a franchise authors a template because they want *those*
+     * words, and the rep approving a draft is not the person who wrote it.
+     */
+    allowAiAdaptation: boolean("allow_ai_adaptation").notNull().default(false),
+    isDefault: boolean("is_default").notNull().default(false),
+    authoredBy: text("authored_by").references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("templates_scope_idx").on(
+      t.triggerType,
+      t.pipelineId,
+      t.stageId,
+      t.track,
+    ),
+    index("templates_active_idx").on(t.active),
   ],
 );
 

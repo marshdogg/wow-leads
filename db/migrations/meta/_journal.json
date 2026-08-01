@@ -29,6 +29,20 @@
       "when": 1785553100916,
       "tag": "0003_hot_shatterstar",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1785600906603,
+      "tag": "0004_misty_karen_page",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1785601094780,
+      "tag": "0005_swift_maelstrom",
+      "breakpoints": true
     }
   ]
 }

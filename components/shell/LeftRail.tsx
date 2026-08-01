@@ -16,10 +16,19 @@ const NAV = [
   { label: "Switcher", href: "/switcher" },
 ];
 
-const CATEGORY_ORDER: PipelineCategory[] = [
-  "RESIDENTIAL LEADS",
-  "COMMERCIAL",
-];
+/**
+ * Category headings, derived from the pipelines rather than listed here, so a
+ * franchise-created category appears in the rail without a code change. Order
+ * follows the pipelines' own order — the first pipeline in a category fixes
+ * where that heading sits.
+ */
+function categoriesIn(pipelines: PipelineConfig[]): PipelineCategory[] {
+  const seen: PipelineCategory[] = [];
+  for (const p of pipelines) {
+    if (p.category && !seen.includes(p.category)) seen.push(p.category);
+  }
+  return seen;
+}
 
 const OUTER_NAV = [
   "Dashboard",
@@ -184,7 +193,7 @@ export function LeftRail({
               gap: 1,
             }}
           >
-            {CATEGORY_ORDER.map((category) => {
+            {categoriesIn(pipelines).map((category) => {
               const inCategory = pipelines.filter(
                 (p) => p.category === category,
               );
