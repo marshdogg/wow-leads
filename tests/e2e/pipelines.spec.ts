@@ -138,7 +138,13 @@ test("a job-site lead links back to the job that produced it", async ({
   // The job's address, so the lead's origin line can be checked against it.
   const jobAddress = (await page.getByTestId("account-line").innerText()).trim();
 
-  await rows.first().click();
+  // Navigate by href rather than clicking a positional row: the repository
+  // does not promise an order, so `.first()` is whichever neighbour lead
+  // Postgres felt like returning. A5 flagged this when they built the panel.
+  const href = await rows.first().getAttribute("href");
+  expect(href).toMatch(/^\/record\//);
+  await page.goto(href!);
+
   await expect(page.getByTestId("sourced-from")).toContainText(
     jobAddress.split(" ")[0],
   );

@@ -8,6 +8,7 @@ import {
   smsLength,
   toDraft,
   TRIGGER_TYPES,
+  usesContactName,
   triggerLabel,
   type TemplateDraft,
 } from "@/components/templates/draft";
@@ -220,6 +221,40 @@ describe("smsLength", () => {
       segments: 0,
       unicode: false,
     });
+  });
+});
+
+describe("usesContactName", () => {
+  it("sees the name token wherever it appears", () => {
+    expect(usesContactName(base)).toBe(true);
+    expect(
+      usesContactName({ ...base, body: "Morning {{contact.firstName}}!" }),
+    ).toBe(true);
+  });
+
+  it("reports its absence", () => {
+    expect(
+      usesContactName({ ...base, body: "Time for your warranty look-over?" }),
+    ).toBe(false);
+  });
+
+  it("counts the subject as part of the message", () => {
+    expect(
+      usesContactName({
+        ...base,
+        channel: "EMAIL",
+        subject: "{{contact.firstName}}, a quick note",
+        body: "Time for your warranty look-over?",
+      }),
+    ).toBe(true);
+  });
+
+  it("is not fooled by a near-miss token", () => {
+    // `{{contact.firstname}}` is a typo, not a name — the unknown-token
+    // warning owns that case, and this check must not paper over it.
+    expect(
+      usesContactName({ ...base, body: "Hi {{contact.firstname}}" }),
+    ).toBe(false);
   });
 });
 

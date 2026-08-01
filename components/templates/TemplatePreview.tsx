@@ -5,6 +5,7 @@ import {
   eligibilityExplanation,
   previewTemplate,
   smsLength,
+  usesContactName,
   type TemplateDraft,
 } from "./draft";
 import { optionStyle, selectStyle } from "./Field";
@@ -40,6 +41,7 @@ export function TemplatePreview({
   const explanation =
     result && deal ? eligibilityExplanation(result, deal.name) : null;
   const sms = draft.channel === "SMS" ? smsLength(result?.body ?? "") : null;
+  const named = usesContactName(draft);
 
   return (
     <div
@@ -209,10 +211,14 @@ export function TemplatePreview({
         </div>
       ) : null}
 
+      {/*
+        Both checks are counted, not judged, and share the muted tone of a
+        caption. Segment boundaries are a fact about the carrier and a missing
+        name is a fact about the text; "this reads salesy" would be an opinion
+        in a warning's clothing, and one noisy check devalues the honest ones
+        beside it.
+      */}
       {sms ? (
-        // Counted, not judged. Segment boundaries are a fact about the
-        // carrier; "this reads salesy" would be an opinion in a warning's
-        // clothing, and one noisy check devalues the honest ones beside it.
         <div
           data-testid="template-sms-length"
           style={{ fontSize: 11, color: "#6f7a6f", marginTop: 9 }}
@@ -222,6 +228,23 @@ export function TemplatePreview({
           {sms.unicode
             ? " · contains a non-GSM character (a curly quote or dash), which halves the per-segment budget"
             : ""}
+        </div>
+      ) : null}
+
+      {!named ? (
+        <div
+          data-testid="template-name-note"
+          style={{ fontSize: 11, color: "#6f7a6f", marginTop: sms ? 4 : 9 }}
+        >
+          This message never uses the contact&rsquo;s name. Add{" "}
+          <code
+            style={{
+              fontFamily: "var(--font-plex-mono), 'IBM Plex Mono', monospace",
+            }}
+          >
+            {"{{contact.firstName}}"}
+          </code>{" "}
+          if that isn&rsquo;t deliberate.
         </div>
       ) : null}
     </div>

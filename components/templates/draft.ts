@@ -239,6 +239,25 @@ export function eligibilityExplanation(
 }
 
 /* -------------------------------------------------------------------------
+   Objective checks
+   ------------------------------------------------------------------------- */
+
+/** The token that puts the recipient's name in the message. */
+const NAME_TOKEN = "contact.firstName";
+
+/**
+ * Whether the copy addresses the recipient by name.
+ *
+ * Reported as a fact, in the same muted tone as the character count, rather
+ * than as a warning: a nameless message is usually a mistake but not always
+ * one, and a check that asserts an opinion is the kind authors learn to
+ * dismiss — taking the segment count with it.
+ */
+export function usesContactName(d: TemplateDraft): boolean {
+  return tokensIn(asTemplate(d)).includes(NAME_TOKEN);
+}
+
+/* -------------------------------------------------------------------------
    SMS length
    ------------------------------------------------------------------------- */
 
