@@ -93,3 +93,11 @@ spec (`design-refs/README.md`) explicitly left open.
   the Vercel dashboard if preview deployments ever need the endpoint.
 - The Record field set still needs sign-off against the real WOW OS deal-detail
   screen (open question #4).
+- **`pnpm seed` deliberately does not reset `users.board_prefs`.** Collapse
+  state and list sort are a person's saved preferences, not demo fixtures, so
+  the seed leaves them alone. The consequence is that clicking around a demo
+  leaves the board sorted however you left it. To reset the demo to the
+  prototype's opening state, run:
+  `update users set board_prefs = '{"collapsedCols":{},"listSort":{"key":"next","dir":1}}'::jsonb;`
+- **No git remote is configured.** The repository is local only; nothing was
+  pushed to GitHub.
