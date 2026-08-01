@@ -1,17 +1,23 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { ChevronDown } from "lucide-react";
 import { LOCATIONS, SWITCHABLE_USERS } from "@/lib/current-user";
 import { useUi } from "@/lib/store/ui";
+import type { PipelineCategory, PipelineConfig } from "@/lib/types";
 
+/** Nav entries that aren't pipelines. Pipelines are grouped above these. */
 const NAV = [
-  { label: "Pipelines", href: "/board" },
   { label: "Approvals", href: "/approvals" },
   { label: "Field view", href: "/field" },
   { label: "Manager dashboard", href: "/manager" },
   { label: "Switcher", href: "/switcher" },
+];
+
+const CATEGORY_ORDER: PipelineCategory[] = [
+  "RESIDENTIAL LEADS",
+  "COMMERCIAL",
 ];
 
 const OUTER_NAV = [
@@ -26,11 +32,21 @@ const OUTER_NAV = [
 export function LeftRail({
   approvalCount,
   neglectedCount,
+  pipelines,
+  pipelineCounts,
 }: {
   approvalCount: number;
   neglectedCount: number;
+  /** Ordered pipelines, grouped into categories by the rail. */
+  pipelines: PipelineConfig[];
+  /** Deal count per pipeline id, shown as the row badge. */
+  pipelineCounts: Record<string, number>;
 }) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  // The board reads its pipeline from the URL, so the rail's active row has to
+  // as well — otherwise every pipeline row highlights on /board.
+  const activePipeline = searchParams.get("pipeline") ?? "resi";
   const showToast = useUi((s) => s.showToast);
   const currentUserId = useUi((s) => s.currentUserId);
   const setCurrentUserId = useUi((s) => s.setCurrentUserId);
@@ -167,10 +183,91 @@ export function LeftRail({
               gap: 1,
             }}
           >
+            {CATEGORY_ORDER.map((category) => {
+              const inCategory = pipelines.filter(
+                (p) => p.category === category,
+              );
+              if (!inCategory.length) return null;
+              return (
+                <div key={category}>
+                  <div
+                    style={{
+                      padding: "10px 12px 5px",
+                      fontSize: 10,
+                      fontWeight: 700,
+                      letterSpacing: "0.8px",
+                      color: "#6f7a6f",
+                    }}
+                  >
+                    {category}
+                  </div>
+                  {inCategory.map((p) => {
+                    const onBoard =
+                      pathname === "/board" || pathname.startsWith("/record");
+                    const on = onBoard && activePipeline === p.id;
+                    const count = pipelineCounts[p.id] ?? 0;
+                    return (
+                      <Link
+                        key={p.id}
+                        href={`/board?pipeline=${p.id}`}
+                        data-testid={`pipeline-${p.id}`}
+                        aria-current={on ? "page" : undefined}
+                        className="hover:!bg-[#1a2a12]"
+                        style={{
+                          padding: "8px 12px",
+                          borderRadius: 7,
+                          fontSize: 13,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 9,
+                          background: on ? "#1f2f16" : "transparent",
+                          color: on ? "#d5f8a8" : "#93a08d",
+                          fontWeight: on ? 600 : 400,
+                        }}
+                      >
+                        <span
+                          aria-hidden
+                          style={{
+                            width: 7,
+                            height: 7,
+                            borderRadius: "50%",
+                            background: p.dot,
+                            flex: "none",
+                          }}
+                        />
+                        <span
+                          style={{
+                            flex: 1,
+                            minWidth: 0,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {p.label}
+                        </span>
+                        {count > 0 ? (
+                          <span
+                            style={{
+                              fontSize: 11,
+                              fontFamily: "var(--font-plex-mono), monospace",
+                              color: on ? "#b6f07a" : "#8b948b",
+                            }}
+                          >
+                            {count}
+                          </span>
+                        ) : null}
+                      </Link>
+                    );
+                  })}
+                </div>
+              );
+            })}
+
+            <div style={{ height: 6 }} />
+
             {NAV.map((n) => {
-              const on =
-                pathname === n.href ||
-                (n.href === "/board" && pathname.startsWith("/record"));
+              const on = pathname === n.href;
               const count = counts[n.href];
               return (
                 <Link

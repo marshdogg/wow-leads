@@ -7,7 +7,12 @@
 import { asc } from "drizzle-orm";
 import { db } from "@/db";
 import { pipelines, stages } from "@/db/schema";
-import type { PipelineConfig, PipelineId, StageConfig, StageId } from "@/lib/types";
+import type {
+  PipelineConfig,
+  PipelineId,
+  StageConfig,
+  StageId,
+} from "@/lib/types";
 
 export async function getPipelines(): Promise<PipelineConfig[]> {
   const [pipeRows, stageRows] = await Promise.all([
@@ -18,12 +23,14 @@ export async function getPipelines(): Promise<PipelineConfig[]> {
   return pipeRows.map((p) => ({
     id: p.id as PipelineId,
     label: p.label,
+    category: p.category as PipelineConfig["category"],
     meta: p.meta,
     dot: p.dot,
     title: p.title,
     sub: p.sub,
     filter: p.filterLabel,
     tracks: p.hasTracks,
+    trackOptions: p.trackOptions as PipelineConfig["trackOptions"],
     showStageValue: p.showStageValue,
     neglectDays: p.neglectDays,
     stages: stageRows

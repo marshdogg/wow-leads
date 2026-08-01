@@ -30,11 +30,32 @@ export interface NeglectedRow {
  * "—" contributes nothing instead of breaking the roll-up.
  */
 export function neglectedTotal(rows: readonly NeglectedRow[]): string {
-  const k = rows.reduce((acc, r) => acc + parseMoneyK(r.value), 0);
+  return sumMoney(rows.map((r) => r.value));
+}
+
+/**
+ * Sum a set of money display strings back into one. Values arrive formatted
+ * ("$96K", "$4.9K est.", "—") because that is what the repositories return;
+ * anything unparseable contributes zero rather than breaking the total.
+ */
+export function sumMoney(values: readonly string[]): string {
+  const k = values.reduce((acc, v) => acc + parseMoneyK(v), 0);
   if (!k) return "$0";
   return k >= 1000
     ? `$${(k / 1000).toFixed(2).replace(/\.?0+$/, "")}M`
     : `$${Math.round(k)}K`;
+}
+
+/**
+ * Whether a formatted money string carries an actual amount.
+ *
+ * A zero total on the attribution surfaces means nothing has been *estimated*
+ * yet — a lead sitting in New has no EST. VALUE by definition — not that the
+ * work was worthless. Printing "$0" asserts the second, so callers show
+ * nothing at all instead.
+ */
+export function hasValue(money: string): boolean {
+  return !/^\$?0(\.0+)?[KM]?$/.test(money.trim());
 }
 
 /** "$96K" → 96 · "$1.2M" → 1200 · "—" → 0. */

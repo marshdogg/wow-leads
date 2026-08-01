@@ -56,6 +56,7 @@ export function assertStageInPipeline(
 export const AGENT_NAMES: Record<string, string> = {
   "agent-remarketing": "Re-marketing agent",
   "agent-prospecting": "Prospecting agent",
+  "agent-intake": "Intake agent",
 };
 
 export interface ProvenanceInput {
@@ -197,10 +198,41 @@ export function isNeglected(
    `$ in stage` roll-up
    ------------------------------------------------------------------------- */
 
-/** The numeric part of a metric value in thousands, or 0 when non-numeric. */
-export function metricThousands(value: string): number {
+/**
+ * The bare number in a metric value, ignoring units. For counts —
+ * "REFERRALS SENT: 14" — where a K suffix would never appear.
+ */
+export function metricNumber(value: string): number {
   const n = parseFloat(value.replace(/[^0-9.]/g, ""));
   return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * A money metric in dollars, honouring its suffix.
+ *
+ * Metric values are written the way a rep would say them, and the unit moves:
+ * Commercial bids read "$180K", a residential job reads "$8,400". Reading both
+ * as the same unit is how "$14K of neighbour leads" became "$14.00M".
+ */
+export function metricDollars(value: string): number {
+  const n = metricNumber(value);
+  if (!n) return 0;
+  if (/m\b/i.test(value)) return n * 1_000_000;
+  if (/k\b/i.test(value)) return n * 1_000;
+  return n;
+}
+
+/** A money metric in thousands, whatever unit it was written in. */
+export function metricThousands(value: string): number {
+  return metricDollars(value) / 1000;
+}
+
+/** Thousands → the way the dashboards write money: "$43K", "$1.05M", "$0". */
+export function formatThousands(k: number): string {
+  // "$0K" is never how anyone writes nothing.
+  if (!k) return "$0";
+  if (k >= 1000) return `$${(k / 1000).toFixed(2)}M`;
+  return `$${Math.round(k)}K`;
 }
 
 /**

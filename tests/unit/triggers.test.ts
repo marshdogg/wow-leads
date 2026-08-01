@@ -12,7 +12,26 @@ import {
 } from "@/lib/triggers/seasonal";
 import { COOLING_MONTHS, evaluateRevival, isPriceObjection } from "@/lib/triggers/revival";
 import { evaluateSequence, stepDueAt } from "@/lib/triggers/sequence";
-import { chipForTrigger, describeTrigger, evaluateTrigger } from "@/lib/triggers";
+import {
+  CREW_WINDOW_DAYS,
+  ESCALATE_MINUTES,
+  TRIGGER_LABELS,
+  TRIGGER_TYPES,
+  WARN_MINUTES,
+  chipForTrigger,
+  describeTrigger,
+  escalationNextAction,
+  escalationNote,
+  evaluateNeighbourCampaign,
+  evaluateSpeedToLead,
+  evaluateTrigger,
+  isPaidSource,
+  outcomeFor,
+  severityFor,
+} from "@/lib/triggers";
+import { humaniseMinutes } from "@/lib/triggers/text";
+import { renderTemplate } from "@/lib/agents/template-drafter";
+import { DEFAULT_SENDER } from "@/lib/agents/types";
 import {
   dayInSequence,
   isAbsent,
@@ -31,8 +50,10 @@ import type {
   ContactFacts,
   ElevenMonthFacts,
   RevivalFacts,
+  NeighbourCampaignFacts,
   SeasonalFacts,
   SequenceFacts,
+  SpeedToLeadFacts,
 } from "@/lib/triggers/types";
 
 /**
@@ -655,5 +676,318 @@ describe("record parsing", () => {
     // step 1 (0) + step 2 (3), landing on day 4. Step 3's own delay is how
     // long until step 4, not how long until itself.
     expect(dayInSequence(steps, 3)).toBe(4);
+  });
+});
+
+/* -------------------------------------------------------------------------
+   Speed to lead — the trigger that must never reach the Approvals queue
+   ------------------------------------------------------------------------- */
+
+const calla: ContactFacts = {
+  name: "Nadia Okafor",
+  firstName: "Nadia",
+  prefers: "SMS",
+  address: "(202) 555-0161",
+  pronoun: null,
+};
+
+function speedToLead(overrides: Partial<SpeedToLeadFacts> = {}): SpeedToLeadFacts {
+  return {
+    kind: "speed_to_lead",
+    dealId: "n1",
+    dealName: "Nadia Okafor",
+    contact: calla,
+    arrivedAt: minutesBefore(NOW, 90),
+    firstContactAt: null,
+    stageId: "new",
+    source: "Facebook Ads",
+    paid: true,
+    ownerName: "Dani Koval",
+    ownerUserId: "u-dani",
+    now: NOW,
+    ...overrides,
+  };
+}
+
+function minutesBefore(now: Date, minutes: number): Date {
+  return new Date(now.getTime() - minutes * 60_000);
+}
+
+describe("speed-to-lead trigger", () => {
+  it("escalates a paid lead that has sat unworked for 90 minutes", () => {
+    const result = evaluateSpeedToLead(speedToLead());
+    expect(result.eligible).toBe(true);
+    expect(result.reasons).toEqual([
+      "Lead arrived 1 hour 30 minutes ago and nobody has contacted them",
+      "Past the 60-minute escalation threshold, not just the 15-minute warning",
+      "Source: Facebook Ads — paid demand, the cost per lead is already spent",
+      "Assigned to Dani Koval, still in the New column",
+    ]);
+  });
+
+  it("is silent while the lead is still inside the warning window", () => {
+    const result = evaluateSpeedToLead(
+      speedToLead({ arrivedAt: minutesBefore(NOW, 4) }),
+    );
+    expect(result.eligible).toBe(false);
+    expect(result.reasons[0]).toContain("still inside the 15-minute window");
+  });
+
+  it("fires on the exact minute the warning threshold is reached", () => {
+    const facts = speedToLead({ arrivedAt: minutesBefore(NOW, WARN_MINUTES) });
+    expect(evaluateSpeedToLead(facts).eligible).toBe(true);
+    expect(severityFor(facts)).toBe("warn");
+  });
+
+  it("stays silent one minute before the warning threshold", () => {
+    const facts = speedToLead({ arrivedAt: minutesBefore(NOW, WARN_MINUTES - 1) });
+    expect(evaluateSpeedToLead(facts).eligible).toBe(false);
+    expect(severityFor(facts)).toBe("on_track");
+  });
+
+  it("crosses from warning to breach on the exact escalation minute", () => {
+    expect(
+      severityFor(speedToLead({ arrivedAt: minutesBefore(NOW, ESCALATE_MINUTES - 1) })),
+    ).toBe("warn");
+    expect(
+      severityFor(speedToLead({ arrivedAt: minutesBefore(NOW, ESCALATE_MINUTES) })),
+    ).toBe("breach");
+  });
+
+  it("says warning rather than breach between the two thresholds", () => {
+    const result = evaluateSpeedToLead(
+      speedToLead({ arrivedAt: minutesBefore(NOW, 30) }),
+    );
+    expect(result.eligible).toBe(true);
+    expect(result.reasons[1]).toBe("Speed-to-lead SLA is 15 minutes to first contact");
+  });
+
+  it("stops once somebody has actually made contact", () => {
+    const result = evaluateSpeedToLead(
+      speedToLead({ firstContactAt: minutesBefore(NOW, 80) }),
+    );
+    expect(result.eligible).toBe(false);
+    expect(result.reasons[0]).toContain("inside the SLA");
+    expect(severityFor(speedToLead({ firstContactAt: NOW }))).toBe("on_track");
+  });
+
+  it("stops once the lead has moved out of the New column", () => {
+    const result = evaluateSpeedToLead(speedToLead({ stageId: "contacted" }));
+    expect(result.eligible).toBe(false);
+    expect(result.reasons[0]).toContain("it is being worked");
+  });
+
+  it("cannot start a clock it has no arrival time for", () => {
+    const result = evaluateSpeedToLead(speedToLead({ arrivedAt: null }));
+    expect(result.eligible).toBe(false);
+    expect(result.reasons[0]).toContain("cannot start the clock");
+  });
+
+  it("still escalates unpaid leads, but says why they matter differently", () => {
+    const result = evaluateSpeedToLead(
+      speedToLead({ source: "Yard Sign", paid: false }),
+    );
+    expect(result.eligible).toBe(true);
+    expect(result.reasons[2]).toBe(
+      "Source: Yard Sign — net-new demand, nobody has worked with us before",
+    );
+  });
+
+  it("knows which sources cost money", () => {
+    for (const paid of ["Facebook Ads", "Instagram", "Google Ads", "Paid social"]) {
+      expect(isPaidSource(paid)).toBe(true);
+    }
+    for (const free of ["Yard Sign", "Door Hanger", "Job Site", "Past Customer"]) {
+      expect(isPaidSource(free)).toBe(false);
+    }
+  });
+
+  it("states the wait precisely, neither flooring nor rounding it", () => {
+    expect(humaniseMinutes(0)).toBe("under a minute");
+    expect(humaniseMinutes(1)).toBe("1 minute");
+    expect(humaniseMinutes(45)).toBe("45 minutes");
+    expect(humaniseMinutes(60)).toBe("1 hour");
+    // The case that matters: 90 minutes is not "1 hour".
+    expect(humaniseMinutes(90)).toBe("1 hour 30 minutes");
+    expect(humaniseMinutes(62)).toBe("1 hour"); // a 2-minute remainder is noise
+    expect(humaniseMinutes(8 * 60 + 20)).toBe("8 hours 20 minutes");
+    expect(humaniseMinutes(24 * 60)).toBe("1 day");
+    expect(humaniseMinutes(50 * 60)).toBe("2 days 2 hours");
+  });
+
+  it("writes an internal note that names the lead, the wait and the owner", () => {
+    const note = escalationNote(speedToLead());
+    expect(note).toContain("BREACH");
+    expect(note).toContain("Nadia Okafor");
+    expect(note).toContain("Dani Koval");
+    expect(note).toContain("Facebook Ads");
+  });
+
+  it("tells the rep to call now when breaching and to hurry when warning", () => {
+    expect(escalationNextAction(speedToLead())).toBe(
+      "Call Nadia Okafor now — speed-to-lead breached",
+    );
+    expect(
+      escalationNextAction(speedToLead({ arrivedAt: minutesBefore(NOW, 20) })),
+    ).toBe("Call Nadia Okafor — speed-to-lead clock running");
+  });
+});
+
+/* -------------------------------------------------------------------------
+   Neighbour campaign
+   ------------------------------------------------------------------------- */
+
+function neighbour(
+  overrides: Partial<NeighbourCampaignFacts> = {},
+): NeighbourCampaignFacts {
+  return {
+    kind: "neighbour_campaign",
+    dealId: "r8",
+    dealName: "Lorna Kirkbride",
+    contact: {
+      name: "",
+      firstName: "",
+      prefers: "SMS",
+      address: "2310 Tunlaw Rd NW",
+      pronoun: null,
+    },
+    jobAddress: "2308 Tunlaw Rd NW",
+    jobCompletedAt: new Date(2026, 6, 29),
+    scope: {
+      summary: "Exterior repaint",
+      workType: "exterior",
+      areas: [],
+      value: "$7,100",
+    },
+    crewName: "Kris Jolin crew",
+    crewOnSiteUntil: new Date(2026, 7, 1),
+    neighbourAddress: "2310 Tunlaw Rd NW",
+    canvassTargetId: "cv-r8-2310",
+    proximity: "two doors down",
+    alreadyKnown: false,
+    now: NOW,
+    ...overrides,
+  };
+}
+
+describe("neighbour campaign trigger", () => {
+  it("fires for an address next to a job we finished two days ago", () => {
+    const result = evaluateNeighbourCampaign(neighbour());
+    expect(result.eligible).toBe(true);
+    expect(result.reasons).toEqual([
+      "We finished exterior work at 2308 Tunlaw Rd NW on Jul 29 · $7,100",
+      "2310 Tunlaw Rd NW is two doors down — on the canvass list for that job",
+      "Kris Jolin crew is in the street through Saturday",
+      "No existing lead or customer at this address",
+    ]);
+  });
+
+  it("is eligible on the last day of the crew window", () => {
+    const facts = neighbour({
+      jobCompletedAt: new Date(2026, 6, 31 - CREW_WINDOW_DAYS),
+    });
+    expect(evaluateNeighbourCampaign(facts).eligible).toBe(true);
+  });
+
+  it("stops one day past the crew window", () => {
+    const facts = neighbour({
+      jobCompletedAt: new Date(2026, 6, 31 - (CREW_WINDOW_DAYS + 1)),
+    });
+    const result = evaluateNeighbourCampaign(facts);
+    expect(result.eligible).toBe(false);
+    expect(result.reasons[0]).toContain("past the 7-day window");
+  });
+
+  it("never canvasses an address we already know", () => {
+    const result = evaluateNeighbourCampaign(neighbour({ alreadyKnown: true }));
+    expect(result.eligible).toBe(false);
+    expect(result.reasons[0]).toContain("already a lead or a customer");
+  });
+
+  it("cannot fire without a completion date or an address", () => {
+    expect(
+      evaluateNeighbourCampaign(neighbour({ jobCompletedAt: null })).eligible,
+    ).toBe(false);
+    expect(
+      evaluateNeighbourCampaign(neighbour({ neighbourAddress: "" })).eligible,
+    ).toBe(false);
+  });
+
+  it("does not claim a job is finished before it is", () => {
+    const result = evaluateNeighbourCampaign(
+      neighbour({ jobCompletedAt: new Date(2026, 7, 3) }),
+    );
+    expect(result.eligible).toBe(false);
+    expect(result.reasons[0]).toContain("not finished yet");
+  });
+
+  it("drops the proximity and crew claims when the record has neither", () => {
+    const result = evaluateNeighbourCampaign(
+      neighbour({ proximity: null, crewName: null, crewOnSiteUntil: null }),
+    );
+    expect(result.eligible).toBe(true);
+    expect(result.reasons).toEqual([
+      "We finished exterior work at 2308 Tunlaw Rd NW on Jul 29 · $7,100",
+      "2310 Tunlaw Rd NW is on the canvass list for that job",
+      "No existing lead or customer at this address",
+    ]);
+  });
+
+  it("stops claiming the crew is present once they have left", () => {
+    const result = evaluateNeighbourCampaign(
+      neighbour({ crewOnSiteUntil: new Date(2026, 6, 30) }),
+    );
+    expect(result.eligible).toBe(true);
+    expect(result.reasons.some((r) => r.includes("in the street"))).toBe(false);
+  });
+});
+
+/* -------------------------------------------------------------------------
+   The queue invariant
+   ------------------------------------------------------------------------- */
+
+describe("what reaches the Approvals queue", () => {
+  it("routes speed-to-lead away from the queue and everything else into it", () => {
+    expect(outcomeFor("speed_to_lead")).toBe("escalate");
+    for (const type of TRIGGER_TYPES.filter((t) => t !== "speed_to_lead")) {
+      expect(outcomeFor(type)).toBe("draft");
+    }
+  });
+
+  it("refuses to draft a customer message for an internal escalation", () => {
+    // Belt and braces behind the discriminator: if a future runner ever routes
+    // an escalation into the drafting path, it fails loudly rather than
+    // sending a half-formed alert to a homeowner.
+    expect(() =>
+      renderTemplate({
+        facts: speedToLead(),
+        reasons: [],
+        channel: "SMS",
+        sender: DEFAULT_SENDER,
+      }),
+    ).toThrow(/internal escalation/);
+  });
+
+  it("has a label and an outcome for every trigger type", () => {
+    expect(TRIGGER_TYPES).toHaveLength(6);
+    for (const type of TRIGGER_TYPES) {
+      expect(TRIGGER_LABELS[type]).toBeTruthy();
+      expect(["draft", "escalate"]).toContain(outcomeFor(type));
+      expect(chipForTrigger(type)).toBeTruthy();
+    }
+  });
+
+  it("presents both new triggers without touching the database", () => {
+    const alert = describeTrigger(speedToLead());
+    expect(alert.title).toBe("Speed-to-lead breach · Nadia Okafor");
+    expect(alert.outcome).toBe("escalate");
+    expect(alert.footnote).toContain("internal alert");
+
+    const door = describeTrigger(neighbour());
+    expect(door.title).toBe("Neighbour campaign · 2310 Tunlaw Rd NW");
+    expect(door.outcome).toBe("draft");
+    expect(door.subtitle).toBe(
+      "Next to 2308 Tunlaw Rd NW · exterior finished Jul 29 · New Leads",
+    );
   });
 });

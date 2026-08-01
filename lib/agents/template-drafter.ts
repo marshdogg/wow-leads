@@ -7,9 +7,11 @@ import {
   seasonName,
   weekdayName,
 } from "@/lib/triggers/dates";
+import { proximityClause } from "@/lib/triggers/record-parse";
 import { joinList, lowerFirst, unpunctuated } from "@/lib/triggers/text";
 import type {
   ElevenMonthFacts,
+  NeighbourCampaignFacts,
   RevivalFacts,
   SeasonalFacts,
   SequenceFacts,
@@ -52,6 +54,15 @@ export function renderTemplate(request: DraftRequest): string {
       return revivalBody(facts, sender);
     case "sequence":
       return sequenceBody(facts, sender);
+    case "neighbour_campaign":
+      return neighbourBody(facts, sender);
+    case "speed_to_lead":
+      // Speed-to-lead never drafts a customer message — it raises an internal
+      // alert. Reaching here means the runner routed an escalation down the
+      // drafting path, which the `outcome` discriminator exists to prevent.
+      throw new Error(
+        "speed_to_lead has no customer-facing draft: it is an internal escalation.",
+      );
   }
 }
 
@@ -190,6 +201,43 @@ function sequenceFollowUpBody(f: SequenceFacts, sender: Sender): string {
   const project = f.projectHint ? f.projectHint : "your upcoming repaint scope";
   parts.push(
     `Still worth ten minutes on ${project}? I can work around your trade schedule.`,
+  );
+
+  return parts.join(" ");
+}
+
+/* -------------------------------------------------------------------------
+   Neighbour campaign
+   ------------------------------------------------------------------------- */
+
+/**
+ * The reference:
+ *
+ *   Hi — Marshall at WOW 1 DAY PAINTING. We just finished the exterior at
+ *   2308 Tunlaw Rd NW, two doors down from you. The crew is in the
+ *   neighbourhood through Friday, so if you have been thinking about your
+ *   trim I can have an estimator take a look while we are already here.
+ *
+ * Two things this must not do. It must not name the recipient, because a
+ * canvassed address has no contact on file and inventing one is worse than
+ * an unaddressed opener. And it must not claim to know anything about
+ * *their* house — "if you have been thinking about your exterior" is a
+ * conditional; "your trim is looking tired" would be a fabrication about
+ * property nobody has looked at.
+ */
+function neighbourBody(f: NeighbourCampaignFacts, sender: Sender): string {
+  const greeting = f.contact.firstName ? `Hi ${f.contact.firstName}` : "Hi";
+  const parts: string[] = [`${greeting} — ${sender.firstName} at ${sender.company}.`];
+
+  const where = f.proximity ? `, ${proximityClause(f.proximity)}` : " nearby";
+  parts.push(`We just finished the ${f.scope.workType} at ${f.jobAddress}${where}.`);
+
+  const stillHere =
+    f.crewOnSiteUntil && f.crewOnSiteUntil.getTime() >= f.now.getTime()
+      ? `The crew is in the neighbourhood through ${weekdayName(f.crewOnSiteUntil)}, so if`
+      : "If";
+  parts.push(
+    `${stillHere} you have been thinking about your ${f.scope.workType} I can have an estimator take a look while we are already here.`,
   );
 
   return parts.join(" ");

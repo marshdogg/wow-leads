@@ -1,0 +1,1 @@
+ALTER TABLE "pipelines" ADD COLUMN "category" text DEFAULT 'COMMERCIAL' NOT NULL;

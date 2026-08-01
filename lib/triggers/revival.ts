@@ -89,6 +89,7 @@ export const revivalTrigger: TriggerDefinition<RevivalFacts> = {
   type: "revival",
   label: "Revival",
   agentId: "agent-remarketing",
+  outcome: "draft",
   evaluate: evaluateRevival,
   title: (f) => `Revival · ${f.contact.name}`,
   subtitle: (f) => {

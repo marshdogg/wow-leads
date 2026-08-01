@@ -39,6 +39,7 @@ export function BoardScreen({
   prefs,
   pipelineParam = "pipeline",
   testIdPrefix,
+  showPipelineSelector = true,
 }: {
   pipelines: PipelineConfig[];
   pipeline: PipelineConfig;
@@ -52,6 +53,12 @@ export function BoardScreen({
   pipelineParam?: string;
   /** Test-id prefix for the selector cards. Defaults to `pipeline-<id>`. */
   testIdPrefix?: string;
+  /**
+   * `/board` switches pipelines from the left rail's category groups and hides
+   * this. The Switcher has no rail category of its own, so it keeps the
+   * selector — hence the default, which leaves that screen untouched.
+   */
+  showPipelineSelector?: boolean;
 }) {
   const [pipe, setPipe] = useQueryState(pipelineParam, pipelineParser);
   const [{ track, view }, setViewState] = useQueryStates(
@@ -68,12 +75,15 @@ export function BoardScreen({
   const stages = pipeline.stages;
   const colKey = (stageId: StageId) => `${pipeline.id}:${stageId}`;
 
+  // Keyed off the same thing the header renders from, so a pipeline can never
+  // show a track control that doesn't filter, or filter with no control.
+  const hasTracks = pipeline.trackOptions.length > 0;
   const visible = useMemo(
     () =>
-      pipeline.tracks && track !== "all"
+      hasTracks && track !== "all"
         ? deals.filter((d) => d.track === track)
         : deals,
-    [deals, pipeline.tracks, track],
+    [deals, hasTracks, track],
   );
 
   /** Stage-keyed view of the global `pipeline:stage` collapse map. */
@@ -151,7 +161,11 @@ export function BoardScreen({
   }
 
   return (
+    // Row from md up — panel beside the board. Below md it stacks, so the
+    // panel becomes a horizontal strip above the content instead of a third
+    // column, which a 390px phone has no room for.
     <div
+      className="flex flex-col md:flex-row"
       style={{
         flex: 1,
         // A flex item defaults to min-width:auto and will not shrink below its
@@ -159,47 +173,56 @@ export function BoardScreen({
         // the page width and drags the whole layout sideways on a phone.
         minWidth: 0,
         minHeight: 560,
-        display: "flex",
-        flexDirection: "column",
       }}
     >
-      <PipelineSelector
-        pipelines={pipelines}
-        selected={pipe}
-        onSelect={selectPipeline}
-        testIdPrefix={testIdPrefix}
-      />
-
-      <BoardHeader
-        pipeline={pipeline}
-        track={track}
-        onTrack={(t) => void setViewState({ track: t })}
-        view={view}
-        onView={(v) => void setViewState({ view: v })}
-        anyExpanded={anyExpanded}
-        onToggleAll={toggleAll}
-      />
-
-      <KpiStrip stats={stats} />
-
-      {view === "board" ? (
-        <BoardColumns
-          pipe={pipeline.id}
-          stages={stages}
-          deals={visible}
-          collapsed={collapsedByStage}
-          onToggle={toggleColumn}
-          onMove={move}
-        />
-      ) : (
-        <ListTable
-          pipeline={pipeline}
-          stages={stages}
-          deals={visible}
-          sort={listSort}
-          onSort={changeSort}
+      {showPipelineSelector && (
+        <PipelineSelector
+          pipelines={pipelines}
+          selected={pipe}
+          onSelect={selectPipeline}
+          testIdPrefix={testIdPrefix}
         />
       )}
+
+      <div
+        style={{
+          flex: 1,
+          minWidth: 0,
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        <BoardHeader
+          pipeline={pipeline}
+          track={track}
+          onTrack={(t) => void setViewState({ track: t })}
+          view={view}
+          onView={(v) => void setViewState({ view: v })}
+          anyExpanded={anyExpanded}
+          onToggleAll={toggleAll}
+        />
+
+        <KpiStrip stats={stats} />
+
+        {view === "board" ? (
+          <BoardColumns
+            pipe={pipeline.id}
+            stages={stages}
+            deals={visible}
+            collapsed={collapsedByStage}
+            onToggle={toggleColumn}
+            onMove={move}
+          />
+        ) : (
+          <ListTable
+            pipeline={pipeline}
+            stages={stages}
+            deals={visible}
+            sort={listSort}
+            onSort={changeSort}
+          />
+        )}
+      </div>
     </div>
   );
 }

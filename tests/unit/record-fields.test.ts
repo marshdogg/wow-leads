@@ -1,6 +1,8 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { metaRows, type RecordView } from "@/components/record/view-model";
+import { PIPES } from "@/lib/pipelines";
 import {
   CHANNEL_LABELS,
   META_FIELDS,
@@ -116,6 +118,7 @@ describe("META_FIELDS", () => {
     expect(META_FIELDS.map((f) => f.key)).toEqual([
       "source",
       "assignedBy",
+      "sourcedFrom",
       "owner",
       "pipeline",
       "businessType",
@@ -124,11 +127,19 @@ describe("META_FIELDS", () => {
     expect(META_FIELDS.map((f) => f.label)).toEqual([
       "Lead source",
       "Assigned by",
+      "Sourced from",
       "Owner",
       "Pipeline",
       "Business type",
       "Preferred contact",
     ]);
+  });
+
+  it("keeps the two provenance rows adjacent", () => {
+    // "Assigned by" and "Sourced from" answer the same question — where this
+    // came from — so they read as a pair rather than being split by Owner.
+    const keys = META_FIELDS.map((f) => f.key);
+    expect(keys.indexOf("sourcedFrom")).toBe(keys.indexOf("assignedBy") + 1);
   });
 
   it("labels every contact channel", () => {
@@ -137,6 +148,76 @@ describe("META_FIELDS", () => {
       EMAIL: "Email",
       PHONE: "Phone",
     });
+  });
+});
+
+describe("metaRows — the config turned into rows", () => {
+  const view: RecordView = {
+    deal: {
+      id: "n3",
+      pipe: "newleads",
+      stage: "new",
+      name: "Priya Raman",
+      account: "2310 Tunlaw Rd NW",
+      tags: ["DIRECT HOMEOWNER"],
+      source: "Job Site",
+      owner: { initials: "DK", name: "Dani Koval", agent: false },
+      assignedBy: "Self-sourced",
+      aiPending: false,
+      stale: "",
+      staleWarn: false,
+      metrics: [],
+      next: null,
+      act: "Log Call",
+      quick: true,
+    },
+    account: { id: "a-n3", name: "Raman residence", tags: [], details: [], accessNotes: "" },
+    contacts: [],
+    accessNotes: "",
+    timeline: [],
+  };
+
+  it("omits the origin row entirely when the lead came off no job", () => {
+    const keys = metaRows(view).map((r) => r.key);
+    expect(keys).not.toContain("sourcedFrom");
+    expect(keys).toContain("assignedBy");
+  });
+
+  it("renders the origin as a green, linked provenance row", () => {
+    const rows = metaRows(view, { id: "r8", account: "2308 Tunlaw Rd NW" });
+    const row = rows.find((r) => r.key === "sourcedFrom");
+    expect(row).toBeDefined();
+    expect(row?.label).toBe("Sourced from");
+    expect(row?.value).toBe("Job at 2308 Tunlaw Rd NW");
+    expect(row?.href).toBe("/record/r8");
+    // Green is the provenance signal, same as a trigger or partner assignment.
+    expect(row?.color).toBe("#b6f07a");
+  });
+
+  it("puts the origin directly after Assigned by", () => {
+    const keys = metaRows(view, { id: "r8", account: "2308 Tunlaw Rd NW" }).map(
+      (r) => r.key,
+    );
+    expect(keys.indexOf("sourcedFrom")).toBe(keys.indexOf("assignedBy") + 1);
+  });
+
+  it("names the pipeline in full, not by its rail label", () => {
+    // `PIPES.resi.label` is "Re-marketing", which only makes sense under the
+    // rail's RESIDENTIAL LEADS heading. This strip has no heading, so the row
+    // must carry the standalone name.
+    const resi = metaRows({
+      ...view,
+      deal: { ...view.deal, pipe: "resi" },
+    }).find((r) => r.key === "pipeline");
+    expect(resi?.value).toBe("Residential Re-marketing");
+    expect(resi?.value).not.toBe(PIPES.resi.label);
+  });
+
+  it("leaves every other row unlinked", () => {
+    const rows = metaRows(view, { id: "r8", account: "2308 Tunlaw Rd NW" });
+    for (const r of rows.filter((x) => x.key !== "sourcedFrom")) {
+      expect(r.href, r.key).toBeUndefined();
+    }
   });
 });
 

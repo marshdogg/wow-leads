@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, gte, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { auditEvents } from "@/db/schema";
 import { SUPPRESSION_ACTION } from "@/lib/agents/approval-machine";
@@ -73,4 +73,62 @@ export function isSuppressed(
   triggerType: TriggerType,
 ): boolean {
   return index.has(suppressionKey(dealId, triggerType));
+}
+
+/* -------------------------------------------------------------------------
+   Escalation history
+   ------------------------------------------------------------------------- */
+
+/**
+ * The audit action escalations are recorded under. Lives here rather than in
+ * the runner so the reader and the writer share one string, and so this file
+ * stays the single answer to "what have we already done to this deal?".
+ */
+export const ESCALATION_ACTION = "trigger.escalated";
+
+export interface EscalationRecord {
+  triggerType: string;
+  at: Date;
+}
+
+/**
+ * Escalations leave no approvals row, so their idempotency is read off the
+ * audit trail. Re-alerting on every cron tick would train reps to ignore the
+ * alert, which is the one outcome worse than not raising it.
+ */
+export async function loadEscalations(
+  dealIds: string[],
+  since: Date,
+): Promise<Map<string, EscalationRecord[]>> {
+  const byDeal = new Map<string, EscalationRecord[]>();
+  if (dealIds.length === 0) return byDeal;
+
+  const rows = await db
+    .select({
+      entityId: auditEvents.entityId,
+      after: auditEvents.after,
+      createdAt: auditEvents.createdAt,
+    })
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.entity, "deal"),
+        eq(auditEvents.action, ESCALATION_ACTION),
+        inArray(auditEvents.entityId, dealIds),
+        gte(auditEvents.createdAt, since),
+      ),
+    );
+
+  for (const row of rows) {
+    const payload = row.after as { triggerType?: unknown } | null;
+    const triggerType =
+      typeof payload?.triggerType === "string" ? payload.triggerType : null;
+    if (!triggerType) continue;
+    const bucket = byDeal.get(row.entityId);
+    const record: EscalationRecord = { triggerType, at: row.createdAt };
+    if (bucket) bucket.push(record);
+    else byDeal.set(row.entityId, [record]);
+  }
+
+  return byDeal;
 }

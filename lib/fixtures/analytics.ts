@@ -80,6 +80,22 @@ export const BIZDEV_MEETINGS_BOOKED: Stat = {
   note: "2 handed to Commercial",
 };
 
+/** REPLACE: median of `first_contact_at - created_at` over the last 30 days. */
+export const NEWLEADS_MEDIAN_SPEED: Stat = {
+  label: "Median speed to first contact",
+  value: "41m",
+  color: "#e9ede9",
+  note: "last 30 days",
+};
+
+/** REPLACE: `count(booked) / count(created)` over new leads in the period. */
+export const NEWLEADS_BOOKING_RATE: Stat = {
+  label: "New-lead booking rate",
+  value: "38%",
+  color: "#7ed321",
+  note: "lead → estimate booked",
+};
+
 /** Notes only — the values beside them are computed from partner deal metrics. */
 export const PARTNER_REFERRALS_YTD_NOTE = "+11 vs. last year";
 export const PARTNER_ATTRIBUTED_NOTE = "18% of booked work";
@@ -91,9 +107,9 @@ export const PARTNER_ATTRIBUTED_NOTE = "18% of booked work";
 /** REPLACE: `count(distinct trigger_type)` over enabled trigger definitions. */
 export const TRIGGERS_LIVE: Stat = {
   label: "Triggers live",
-  value: "4",
+  value: "6",
   color: "#e9ede9",
-  note: "11-month · seasonal · revival · sequence",
+  note: "11-month · seasonal · revival · sequence · speed-to-lead · neighbour",
 };
 
 /** REPLACE: `count(approvals) where created_at > now()-7d`, split by status. */

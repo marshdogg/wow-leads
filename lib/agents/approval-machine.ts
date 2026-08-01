@@ -2,7 +2,12 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { approvals } from "@/db/schema";
 import { appendAudit } from "@/lib/repositories/audit";
-import { setAiPending, setNextAction } from "@/lib/repositories/deals";
+import {
+  createDeal,
+  markCanvassTarget,
+  setAiPending,
+  setNextAction,
+} from "@/lib/repositories/deals";
 import { toApproval } from "@/lib/repositories/mappers";
 import { formatDue } from "@/lib/repositories/rules";
 import { logTouchpoint } from "@/lib/repositories/touchpoints";
@@ -168,6 +173,15 @@ export function nextActionFor(approval: Approval, now: Date): PlannedNextAction 
       return { label: "Revival call — follow the message up", dueAt: addDays(now, 2) };
     case "sequence":
       return { label: "Next sequence step", dueAt: addDays(now, 3) };
+    case "neighbour_campaign":
+      // The crew is still in the street; a knock beats a wait.
+      return { label: "Door-knock the new neighbour lead", dueAt: addDays(now, 1) };
+    case "speed_to_lead":
+      // Unreachable in practice — a speed-to-lead escalation never becomes an
+      // approval, so nothing gets here to be decided. Kept total, and kept
+      // urgent, because the one thing that must not happen to a fresh lead is
+      // for it to acquire a relaxed deadline.
+      return { label: "Call the lead now", dueAt: addDays(now, 1) };
   }
 }
 
@@ -250,9 +264,22 @@ async function send(
     actorUserId: input.actorUserId,
   });
 
+  // A neighbour draft is not just a message — approving it is the moment the
+  // address becomes a lead we are tracking. `sourcedFromDealId` points back at
+  // the job whose crew they saw, which is what lets the manager dashboard say
+  // "this repaint generated three leads".
+  const neighbourLead =
+    approval.triggerType === "neighbour_campaign"
+      ? await createNeighbourLead(approval, agentId, input.actorUserId)
+      : null;
+
+  // The follow-up belongs on the card a rep will act from. For every other
+  // trigger that is the deal the approval hangs off; for a neighbour campaign
+  // it is the lead we just created, not the finished job that justified it —
+  // nobody door-knocks the house they already painted.
   const next = nextActionFor(approval, now);
   const withNext = await setNextAction({
-    dealId: approval.dealId,
+    dealId: neighbourLead?.id ?? approval.dealId,
     label: next.label,
     due: formatDue(next.dueAt),
     state: "ok",
@@ -293,6 +320,12 @@ async function skip(
     value: false,
     actorUserId,
   });
+
+  // A declined house is declined for good — the predicate filters `skipped`
+  // targets out, so this is what makes "no, not that one" stick.
+  if (approval.triggerType === "neighbour_campaign") {
+    await markNeighbourTarget(approval, "skipped", actorUserId);
+  }
 
   await appendAudit({
     entity: "approval",
@@ -375,4 +408,80 @@ export function touchpointChannel(channel: string): TouchpointChannel {
   return head === "SMS" || head === "EMAIL" || head === "CALL" || head === "VISIT"
     ? head
     : "NOTE";
+}
+
+/* -------------------------------------------------------------------------
+   Neighbour leads
+   ------------------------------------------------------------------------- */
+
+/**
+ * The address on the approval becomes a New Leads card.
+ *
+ * The lead is named for the address rather than a person, because a canvassed
+ * house has no contact on file and inventing one would put a fictional name
+ * on a real card. A rep replaces it with a name the moment somebody answers
+ * the door.
+ *
+ * Re-approval cannot duplicate the lead: the state machine refuses a second
+ * decision on a `sent` approval, and the neighbour predicate skips any address
+ * that already matches a deal.
+ */
+async function createNeighbourLead(
+  approval: Approval,
+  agentId: AgentId,
+  actorUserId: string,
+): Promise<Deal> {
+  const address = approval.recipient.trim();
+  if (!address) {
+    throw new Error(
+      `Approval ${approval.id} is a neighbour campaign with no address to create a lead for.`,
+    );
+  }
+
+  const lead = await createDeal({
+    pipelineId: "newleads",
+    stageId: "new",
+    track: "canvassed",
+    name: address,
+    accountLine: address,
+    source: "Job Site",
+    tags: ["DIRECT HOMEOWNER"],
+    ownerAgentId: agentId,
+    assignedBy: `Neighbour campaign → ${approval.dealId}`,
+    sourcedFromDealId: approval.dealId,
+    // Owned by the agent that sourced it, authored by the person who decided.
+    actorUserId,
+  });
+
+  // Close the canvass target's lifecycle: pending → drafted → created. Without
+  // this the Record screen would keep showing the address as unworked after a
+  // rep has already turned it into a lead.
+  await markNeighbourTarget(approval, "created", actorUserId, lead.id);
+  return lead;
+}
+
+/**
+ * Advance the canvass row behind an approval.
+ *
+ * Matched by address rather than id: `(source_deal_id, address)` is unique on
+ * the table, and the approval already carries the address as its recipient,
+ * so nothing extra has to be threaded through the approvals row to find it
+ * again.
+ */
+async function markNeighbourTarget(
+  approval: Approval,
+  status: "created" | "skipped",
+  actorUserId: string,
+  dealId?: string,
+): Promise<void> {
+  const address = approval.recipient.trim();
+  if (!address) return;
+
+  await markCanvassTarget({
+    sourceDealId: approval.dealId,
+    address,
+    status,
+    dealId,
+    actorUserId,
+  });
 }

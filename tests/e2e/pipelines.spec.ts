@@ -38,6 +38,12 @@ const PIPELINES = [
     stages: ["identified", "introduced", "active", "dormant"],
     kpi: "Active referrers",
   },
+  {
+    id: "newleads",
+    title: "New Leads",
+    stages: ["new", "contacted", "qualified", "booked", "nurture"],
+    kpi: "",
+  },
 ];
 
 const ALL_STAGES = PIPELINES.flatMap((p) => p.stages);
@@ -49,7 +55,9 @@ for (const pipe of PIPELINES) {
     await page.goto(`/board?pipeline=${pipe.id}&view=board`);
 
     await expect(page.getByTestId("board-title")).toHaveText(pipe.title);
-    await expect(page.getByTestId("kpi-strip")).toContainText(pipe.kpi);
+    if (pipe.kpi) {
+      await expect(page.getByTestId("kpi-strip")).toContainText(pipe.kpi);
+    }
 
     for (const stage of pipe.stages) {
       await expect(page.getByTestId(`column-${stage}`)).toBeVisible();
@@ -73,7 +81,7 @@ test("Commercial columns show a $ in stage roll-up, others do not", async ({
   await expect(page.getByTestId("stage-total-past")).toHaveCount(0);
 });
 
-test("the track filter is Residential-only and resets on pipeline change", async ({
+test("the track filter appears only on tracked pipelines and resets on change", async ({
   page,
 }) => {
   await page.goto("/board?pipeline=resi&view=board");
@@ -91,6 +99,61 @@ test("the track filter is Residential-only and resets on pipeline change", async
     "data-active",
     "true",
   );
+});
+
+test("track options are per-pipeline, and New Leads opts out entirely", async ({
+  page,
+}) => {
+  await page.goto("/board?pipeline=resi&view=board");
+  const resiFilter = page.getByTestId("track-filter");
+  await expect(resiFilter).toContainText("Repeat work");
+  await expect(resiFilter).toContainText("Revival");
+
+  // New Leads surfaces the source as a card metric and filters it from the
+  // dropdown, so it has no track control at all — not an empty one.
+  await page.goto("/board?pipeline=newleads&view=board");
+  await expect(page.getByTestId("track-filter")).toHaveCount(0);
+  await expect(page.getByTestId("board-category")).toHaveText(
+    "RESIDENTIAL LEADS",
+  );
+  await expect(page.getByTestId("board-title")).toHaveText("New Leads");
+});
+
+test("a job-site lead links back to the job that produced it", async ({
+  page,
+}) => {
+  // The linkage is the business case for canvassing around active job sites,
+  // so the round trip is asserted rather than the fixture count — how many
+  // neighbour leads the demo carries is a seed choice, not behaviour.
+  await page.goto("/manager");
+  const attribution = page.getByTestId("job-site-attribution");
+  await expect(attribution).toBeVisible();
+  await attribution.getByTestId("attribution-top-job").click();
+
+  const sourced = page.getByTestId("sourced-leads");
+  await expect(sourced).toBeVisible();
+  const rows = sourced.getByTestId("sourced-lead-row");
+  expect(await rows.count()).toBeGreaterThan(0);
+
+  // The job's address, so the lead's origin line can be checked against it.
+  const jobAddress = (await page.getByTestId("account-line").innerText()).trim();
+
+  await rows.first().click();
+  await expect(page.getByTestId("sourced-from")).toContainText(
+    jobAddress.split(" ")[0],
+  );
+});
+
+test("a record with no job origin renders neither attribution panel", async ({
+  page,
+}) => {
+  // Absent from the DOM, not present-and-empty: a regression that rendered an
+  // empty "Leads from this job" panel on all 25 ordinary records would
+  // otherwise pass silently.
+  await page.goto("/record/r1");
+  await expect(page.getByTestId("timeline")).toBeVisible();
+  await expect(page.getByTestId("sourced-leads")).toHaveCount(0);
+  await expect(page.getByTestId("sourced-from")).toHaveCount(0);
 });
 
 test("the Switcher renders Commercial, Biz Dev and Partner", async ({

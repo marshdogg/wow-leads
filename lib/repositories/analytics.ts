@@ -24,6 +24,8 @@ import {
   PIPELINE_HEALTH,
   PROSPECT_AVG_TIME_BETWEEN_TOUCHPOINTS,
   PROSPECT_CONTACTS_IN_PROGRESS,
+  NEWLEADS_BOOKING_RATE,
+  NEWLEADS_MEDIAN_SPEED,
   RESI_ELIGIBLE_PAST_CUSTOMERS,
   RESI_REPEAT_REVENUE,
   SOURCE_ROI,
@@ -31,7 +33,7 @@ import {
   TRIGGERS_LIVE,
 } from "@/lib/fixtures/analytics";
 import { getNeglectedDeals, getPipelineValueThousands } from "./deals";
-import { metricThousands } from "./rules";
+import { formatThousands, metricNumber, metricThousands } from "./rules";
 import type { DealMetric, PipelineId } from "@/lib/types";
 
 export interface Stat {
@@ -67,16 +69,30 @@ export interface SourceRoiRow {
   color: string;
 }
 
-/** Metric values are already in thousands: 1050 → "$1.05M", 192.4 → "$192K". */
-function formatThousands(k: number): string {
-  if (k >= 1000) return `$${(k / 1000).toFixed(2)}M`;
-  return `$${Math.round(k)}K`;
+/** Sums a money metric in thousands. */
+const MS_DAY = 86_400_000;
+
+/** "14m", "26h", "3d" — the shortest true reading of an elapsed span. */
+function formatAge(ms: number): string {
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(ms / 3_600_000);
+  if (hours < 48) return `${hours}h`;
+  return `${Math.floor(ms / MS_DAY)}d`;
 }
 
-function sumMetric(rows: { metrics: DealMetric[] }[], label: string): number {
+function sumMoney(rows: { metrics: DealMetric[] }[], label: string): number {
   return rows.reduce((acc, r) => {
     const m = r.metrics.find((x) => x.label === label);
     return acc + (m ? metricThousands(m.value) : 0);
+  }, 0);
+}
+
+/** Sums a plain count metric — referrals sent, not dollars. */
+function sumCount(rows: { metrics: DealMetric[] }[], label: string): number {
+  return rows.reduce((acc, r) => {
+    const m = r.metrics.find((x) => x.label === label);
+    return acc + (m ? metricNumber(m.value) : 0);
   }, 0);
 }
 
@@ -132,13 +148,43 @@ export async function getBoardStats(pipe: PipelineId): Promise<Stat[]> {
     ];
   }
 
+  if (pipe === "newleads") {
+    const rows = await db
+      .select({ stageId: deals.stageId, createdAt: deals.createdAt })
+      .from(deals)
+      .where(eq(deals.pipelineId, "newleads"));
+
+    const unworked = rows.filter((r) => r.stageId === "new");
+    const now = Date.now();
+    const oldestMs = unworked.reduce(
+      (max, r) => Math.max(max, now - r.createdAt.getTime()),
+      0,
+    );
+
+    return [
+      {
+        label: "Unworked leads",
+        value: String(unworked.length),
+        // Amber once anything is waiting, red once the window has gone.
+        color: !unworked.length
+          ? "#7ed321"
+          : oldestMs >= MS_DAY
+            ? "#e07a68"
+            : "#e0a52b",
+        note: `oldest ${formatAge(oldestMs)} · target under 5 min`,
+      },
+      NEWLEADS_MEDIAN_SPEED,
+      NEWLEADS_BOOKING_RATE,
+    ];
+  }
+
   const partnerRows = await db
     .select({ stageId: deals.stageId, metrics: deals.metrics })
     .from(deals)
     .where(eq(deals.pipelineId, "partner"));
   const active = partnerRows.filter((r) => r.stageId === "active").length;
-  const referrals = sumMetric(partnerRows, "REFERRALS SENT");
-  const attributed = sumMetric(partnerRows, "ATTRIBUTED");
+  const referrals = sumCount(partnerRows, "REFERRALS SENT");
+  const attributed = sumMoney(partnerRows, "ATTRIBUTED");
 
   return [
     {

@@ -100,6 +100,7 @@ export const elevenMonthTrigger: TriggerDefinition<ElevenMonthFacts> = {
   type: "eleven_month",
   label: "11-month warranty",
   agentId: "agent-remarketing",
+  outcome: "draft",
   evaluate: evaluateElevenMonth,
   title: (f) => `11-Month Touchpoint · ${f.contact.name}`,
   // "Interior repaint completed Aug 2025 · $8,400 · Residential Re-marketing"

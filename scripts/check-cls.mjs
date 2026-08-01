@@ -30,7 +30,7 @@ async function main() {
       }).observe({ type: "layout-shift", buffered: true });
     });
 
-    await page.goto(`${BASE}${route}`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}${route}`, { waitUntil: "domcontentloaded" });
     // Let the card-entry animation and any late fonts settle.
     await page.waitForTimeout(2500);
     await page.mouse.wheel(600, 0);

@@ -64,7 +64,15 @@ export function staleDays(stale: string): number | null {
 export const anchorDays = staleDays;
 
 function silenceDays(s: string): number | null {
-  let m = /^(\d+)\s*d\s+silent$/i.exec(s);
+  // New Leads measures its clock in minutes, not weeks — a fractional day is
+  // the honest answer for "new 12 min ago", and `daysSince` floors it to 0.
+  let m = /(\d+)\s*min\b/i.exec(s);
+  if (m) return Number(m[1]) / 1440;
+
+  m = /(\d+)\s*(?:hrs?|hours?)\b/i.exec(s);
+  if (m) return Number(m[1]) / 24;
+
+  m = /^(\d+)\s*d\s+silent$/i.exec(s);
   if (m) return Number(m[1]);
 
   m = /(\d+)\s*d\s+ago/i.exec(s);
@@ -111,6 +119,19 @@ function withTime(base: Date, due: string, fallbackHour: number): Date {
 export function nextDueFrom(due: string, now: Date): Date | null {
   const s = due.trim();
   if (!s) return null;
+
+  const overdueHours = /^was due\s+(\d+)\s+hours?\s+ago/i.exec(s);
+  if (overdueHours) {
+    return new Date(now.getTime() - Number(overdueHours[1]) * 3_600_000);
+  }
+
+  // "Now · speed-to-lead" — the SLA clock, due this instant.
+  if (/^now\b/i.test(s)) return new Date(now);
+
+  const dueInMinutes = /^due in\s+(\d+)\s*min/i.exec(s);
+  if (dueInMinutes) {
+    return new Date(now.getTime() + Number(dueInMinutes[1]) * 60_000);
+  }
 
   const overdue = /^was due\s+(\d+)\s+days?\s+ago/i.exec(s);
   if (overdue) {

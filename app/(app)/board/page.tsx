@@ -68,6 +68,9 @@ export default async function BoardPage({
       deals={deals}
       stats={stats}
       prefs={prefs}
+      // Pipelines are switched from the left rail's category groups here; the
+      // board's own selector would be a second copy of the same navigation.
+      showPipelineSelector={false}
     />
   );
 }

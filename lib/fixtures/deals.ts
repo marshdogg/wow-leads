@@ -38,6 +38,8 @@ export interface DealFixture {
   quick: boolean;
   osRef?: string;
   initialType?: string;
+  /** The job whose crew this neighbour walked past. */
+  sourcedFromDealId?: string;
 }
 
 export const DEAL_FIXTURES: DealFixture[] = [
@@ -609,6 +611,144 @@ export const DEAL_FIXTURES: DealFixture[] = [
     act: "Log Call",
     quick: true,
   },
+  /* -----------------------------------------------------------------------
+     New Leads — net-new residential demand. Nobody here has worked with us
+     before, so there is no history to lean on and speed to first contact is
+     the whole game. Fixtures match the board Marshall specified.
+     ----------------------------------------------------------------------- */
+
+  {
+    id: "n1",
+    pipe: "newleads",
+    // No track chip: New Leads surfaces the source as a card metric instead.
+    track: undefined,
+    stage: "new",
+    name: "Marisol Freire",
+    account: "3320 Brown St NW",
+    tags: ["DIRECT HOMEOWNER", "INTERIOR"],
+    source: "Google Ads",
+    owner: { initials: "AI", name: "Intake agent", agent: true },
+    assignedBy: "Web form → unassigned",
+    aiPending: true,
+    stale: "14 min old",
+    metrics: [
+      { label: "SOURCE", value: "Google Ads" },
+      { label: "ASKED FOR", value: "3 rooms" },
+    ],
+    next: {
+      label: "First call — draft text ready",
+      due: "Now · speed-to-lead",
+      state: "ok",
+    },
+    act: "Review draft",
+    quick: true,
+  },
+  {
+    id: "n2",
+    pipe: "newleads",
+    // No track chip: New Leads surfaces the source as a card metric instead.
+    track: undefined,
+    stage: "new",
+    name: "Oyelaran Bankole",
+    // Nobody picked this one up, which is the whole story: unassigned, one
+    // voicemail, then silence past the one-day window.
+    account: "905 Rhode Island Ave NE",
+    tags: ["DIRECT HOMEOWNER", "EXTERIOR"],
+    source: "Yard Sign",
+    owner: { initials: "—", name: "Unassigned", agent: false },
+    assignedBy: "Yard sign → unassigned",
+    stale: "26 hr silent",
+    staleWarn: true,
+    metrics: [
+      { label: "SOURCE", value: "Yard sign" },
+      // Value is derived at seed time from `sourcedFromDealId`, never typed.
+      { label: "NEIGHBOUR OF", value: "" },
+    ],
+    next: {
+      label: "Call back — left voicemail",
+      due: "Was due 18 hours ago",
+      state: "overdue",
+    },
+    act: "Log Call",
+    quick: true,
+    sourcedFromDealId: "r8",
+  },
+  {
+    id: "n3",
+    pipe: "newleads",
+    // No track chip: New Leads surfaces the source as a card metric instead.
+    track: undefined,
+    stage: "contacted",
+    name: "Hollis Trent",
+    account: "2214 Newton St NE",
+    tags: ["DIRECT HOMEOWNER", "INTERIOR"],
+    source: "Canvassing",
+    owner: { initials: "JB", name: "Jorden Bhatt", agent: false },
+    assignedBy: "Canvass → Jorden",
+    stale: "touched 1d ago",
+    metrics: [
+      { label: "SOURCE", value: "Canvassing" },
+      { label: "ASKED FOR", value: "Stairwell" },
+    ],
+    next: {
+      label: "Send the ballpark range",
+      due: "Today 4:00 PM",
+      state: "ok",
+    },
+    act: "Send Text",
+    quick: true,
+  },
+  {
+    id: "n4",
+    pipe: "newleads",
+    // No track chip: New Leads surfaces the source as a card metric instead.
+    track: undefined,
+    stage: "qualified",
+    name: "Renata Vasquez",
+    account: "618 Quincy St NW",
+    tags: ["DIRECT HOMEOWNER", "INTERIOR"],
+    source: "Canvassing",
+    owner: { initials: "RA", name: "Reese Alvarado", agent: false },
+    assignedBy: "Self-sourced",
+    stale: "touched 3h ago",
+    metrics: [
+      { label: "BUDGET", value: "$5–7K" },
+      { label: "TIMING", value: "Aug" },
+    ],
+    next: {
+      label: "Book the estimate walk-through",
+      due: "Tomorrow 9:00 AM",
+      state: "ok",
+    },
+    act: "Log Visit",
+    quick: true,
+  },
+  {
+    id: "n5",
+    pipe: "newleads",
+    // No track chip: New Leads surfaces the source as a card metric instead.
+    track: undefined,
+    stage: "booked",
+    name: "Theo Lindqvist",
+    account: "1445 Otis Pl NW",
+    tags: ["DIRECT HOMEOWNER", "EXTERIOR"],
+    source: "Web Form",
+    owner: { initials: "RA", name: "Reese Alvarado", agent: false },
+    assignedBy: "Self-sourced",
+    stale: "booked 1d ago",
+    osRef: "EST-40311",
+    metrics: [
+      { label: "EST. VALUE", value: "$9,100" },
+      { label: "WALK", value: "Aug 4" },
+    ],
+    next: {
+      label: "Estimator confirmed — nothing to do",
+      due: "Aug 4 · 8:30 AM",
+      state: "ok",
+    },
+    act: "View in Funnel",
+    quick: false,
+  },
 ];
 
 /** Prototype owner initials → seeded user id. AI owners map to agent ids. */
@@ -623,4 +763,5 @@ export const OWNER_USER_BY_INITIALS: Record<string, string> = {
 export const AGENT_ID_BY_OWNER_NAME: Record<string, string> = {
   "Re-marketing agent": "agent-remarketing",
   "Prospecting agent": "agent-prospecting",
+  "Intake agent": "agent-intake",
 };

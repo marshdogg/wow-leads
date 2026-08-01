@@ -205,5 +205,32 @@ function factLines(facts: TriggerFacts): string[] {
       );
       return lines;
     }
+
+    case "neighbour_campaign": {
+      const lines = [
+        "TRIGGER: we just finished a job on this street and the crew is still nearby",
+        `THE JOB WE CAN POINT AT: ${facts.scope.workType} work at ${facts.jobAddress}`,
+      ];
+      if (facts.jobCompletedAt)
+        lines.push(`FINISHED: ${monthDay(facts.jobCompletedAt)}`);
+      if (facts.proximity)
+        lines.push(`HOW CLOSE THEY ARE TO IT: ${facts.proximity}`);
+      if (facts.crewName) lines.push(`CREW: ${facts.crewName}`);
+      if (facts.crewOnSiteUntil)
+        lines.push(`CREW ON SITE UNTIL: ${monthDay(facts.crewOnSiteUntil)}`);
+      lines.push(
+        "RECIPIENT NAME: unknown — this is a canvassed address, so open without a name rather than inventing one",
+        "YOU KNOW NOTHING ABOUT THEIR HOUSE. Do not describe its condition, its colour, or its trim. Phrase the offer as a conditional about what they might have been considering.",
+        "THE ASK: an estimator takes a look while the crew is already on the street",
+      );
+      return lines;
+    }
+
+    case "speed_to_lead":
+      // An internal alert has no customer-facing draft. The `outcome`
+      // discriminator keeps the runner from ever calling a drafter with it.
+      throw new Error(
+        "speed_to_lead has no customer-facing draft: it is an internal escalation.",
+      );
   }
 }

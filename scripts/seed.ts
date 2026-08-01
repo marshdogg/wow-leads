@@ -24,6 +24,7 @@ import {
   type DealFixture,
 } from "@/lib/fixtures/deals";
 import { anchorDays, nextDueFrom } from "@/lib/fixtures/time";
+import type { DealMetric } from "@/lib/types";
 import { ESTIMATORS, PIPELINE_IDS, PIPES } from "@/lib/pipelines";
 import { CONTACT_CHANNELS, isContactChannel } from "@/lib/repositories/rules";
 
@@ -72,6 +73,15 @@ const HERO_DETAILS = [
   { label: "TRIM / CEILINGS", value: "Advance semi-gloss, Chantilly Lace" },
   { label: "LAST JOB", value: "Aug 21, 2025 · $8,400" },
   { label: "CREW", value: "Kris Jolin crew · 1-day interior" },
+];
+
+/** The Tunlaw job the neighbour campaign anchors on — it has real history. */
+const R8_DETAILS = [
+  { label: "PROPERTY TYPE", value: "Exterior · semi-detached, 2 floors" },
+  { label: "SQUARE FOOTAGE", value: "1,850 sq ft" },
+  { label: "PAINT USED", value: "Aura Exterior · Cloud White OC-130" },
+  { label: "LAST JOB", value: "Exterior repaint · $9,250" },
+  { label: "CREW", value: "Kris Jolin crew · 1-day exterior" },
 ];
 
 const HERO_ACCESS_NOTE =
@@ -137,12 +147,14 @@ const pipelineRows = PIPELINE_IDS.map((id, i) => {
   return {
     id: p.id,
     label: p.label,
+    category: p.category,
     meta: p.meta,
     dot: p.dot,
     title: p.title,
     sub: p.sub,
     filterLabel: p.filter,
     hasTracks: p.tracks,
+    trackOptions: p.trackOptions,
     showStageValue: p.showStageValue,
     neglectDays: p.neglectDays,
     sortOrder: i,
@@ -166,7 +178,12 @@ const accountRows = DEAL_FIXTURES.map((d) => ({
   name: d.id === HERO_ID ? "Marchetti residence" : d.account,
   line: d.account,
   tags: d.tags,
-  details: d.id === HERO_ID ? HERO_DETAILS : genericDetails(d.tags),
+  details:
+    d.id === HERO_ID
+      ? HERO_DETAILS
+      : d.id === "r8"
+        ? R8_DETAILS
+        : genericDetails(d.tags),
 }));
 
 interface ContactRow {
@@ -384,6 +401,27 @@ const promoRows = [
 
 const PROMO_BY_DEAL: Record<string, string> = { r5: "promo-spring15" };
 
+/**
+ * The job reference a neighbour lead points at. Rendering it from
+ * `sourcedFromDealId` rather than typing it on the card means the board, the
+ * Record screen and `getJobSiteAttribution()` can never name different jobs.
+ */
+const JOB_REFERENCE: Record<string, string> = { r8: "Job #4471" };
+
+function neighbourMetrics(d: DealFixture): DealMetric[] {
+  const metrics = d.metrics ?? [];
+  if (!d.sourcedFromDealId) return metrics;
+  return metrics.map((m) =>
+    m.label === "NEIGHBOUR OF"
+      ? {
+          label: m.label,
+          value:
+            JOB_REFERENCE[d.sourcedFromDealId!] ?? d.sourcedFromDealId!,
+        }
+      : m,
+  );
+}
+
 function dealRow(
   d: DealFixture,
   latestTouchAt: Date | null,
@@ -411,7 +449,7 @@ function dealRow(
     stale: d.stale,
     staleWarn: d.staleWarn ?? false,
     lastTouchAt: latestTouchAt,
-    metrics: d.metrics ?? [],
+    metrics: neighbourMetrics(d),
     sequenceId: d.seqName ? (SEQUENCE_ID_BY_NAME[d.seqName] ?? null) : null,
     seq: d.seq ?? null,
     seqName: d.seqName ?? null,
@@ -429,6 +467,7 @@ function dealRow(
       ? (d.metrics?.find((m) => m.label === "RETRY")?.value ?? null)
       : null,
     promoId: PROMO_BY_DEAL[d.id] ?? null,
+    sourcedFromDealId: d.sourcedFromDealId ?? null,
     createdAt,
     updatedAt: NOW,
   };
@@ -604,6 +643,102 @@ function genericTouchpoints(d: DealFixture): TouchpointRow[] {
 }
 
 /**
+ * New Leads timelines.
+ *
+ * The generic three-entry shape does not fit here. A lead in `new` is by
+ * definition *unworked* — nobody has spoken to them, so it gets a SOURCE row
+ * marking arrival and nothing else, and its `lastTouchAt` is null. That is
+ * what makes the SLA breach on n2 real: the record shows no contact for 28
+ * hours, not a friendly call three days ago. Arrival is also minutes or hours
+ * back rather than weeks, so the +18-day SOURCE offset would be nonsense.
+ */
+const NEW_LEAD_ARRIVAL: Record<
+  string,
+  { createdDaysAgo: number; body: string; contact?: { channel: string; body: string } }
+> = {
+  n1: {
+    // Effectively "just now". A static seed still ages — see the freshness
+    // note the seed prints — but starting at the top of the window gives the
+    // longest run before the on-track lead turns into a second breach.
+    createdDaysAgo: 14 / 1440,
+    body: "Web form submitted — Google Ads, interior enquiry, 3 rooms",
+  },
+  n2: {
+    createdDaysAgo: 26 / 24,
+    body: "Called the number on the yard sign at a job in progress",
+    contact: {
+      channel: "CALL",
+      body: "Left a voicemail — no answer, nobody assigned to chase it",
+    },
+  },
+  n3: {
+    createdDaysAgo: 3,
+    body: "Canvass door knock — stairwell discussed on the doorstep",
+    contact: {
+      channel: "CALL",
+      body: "Talked through the stairwell — wants a ballpark before committing",
+    },
+  },
+  n4: {
+    createdDaysAgo: 5,
+    body: "Self-sourced — Reese followed up a street she was already working",
+    contact: {
+      channel: "CALL",
+      body: "Budget $5–7K, wants the work done in August. Ready to book a walk-through.",
+    },
+  },
+  n5: {
+    createdDaysAgo: 8,
+    body: "Web form submitted — exterior enquiry",
+    contact: {
+      channel: "CALL",
+      body: "Walk-through booked for Aug 4, 8:30 with the estimator",
+    },
+  },
+};
+
+function newLeadTouchpoints(d: DealFixture): TouchpointRow[] {
+  const arrival = NEW_LEAD_ARRIVAL[d.id];
+  const accountId = accountIdFor(d.id);
+  const userId = OWNER_USER_BY_INITIALS[d.owner.initials] ?? null;
+
+  const rows: TouchpointRow[] = [
+    {
+      id: `tp-${d.id}-3`,
+      dealId: d.id,
+      accountId,
+      channel: "SOURCE",
+      body: arrival.body,
+      who: d.assignedBy,
+      byAgent: false,
+      initials: "OS",
+      userId: null,
+      agentId: null,
+      structured: null,
+      occurredAt: daysAgo(arrival.createdDaysAgo),
+    },
+  ];
+
+  if (arrival.contact) {
+    rows.unshift({
+      id: `tp-${d.id}-1`,
+      dealId: d.id,
+      accountId,
+      channel: arrival.contact.channel,
+      body: arrival.contact.body,
+      who: d.owner.name,
+      byAgent: false,
+      initials: d.owner.initials,
+      userId,
+      agentId: null,
+      structured: null,
+      occurredAt: daysAgo(anchorDays(d.stale) ?? 0),
+    });
+  }
+  return rows;
+}
+
+/**
  * Event touchpoints behind the display-only metrics on r5, r6 and b2, so the
  * trigger service can read a real `occurredAt` instead of parsing
  * "promo sent 3d ago" / "lost 6 mo ago" out of a card string. The r1
@@ -611,6 +746,31 @@ function genericTouchpoints(d: DealFixture): TouchpointRow[] {
  * the hero timeline.
  */
 const eventTouchpoints: TouchpointRow[] = [
+  {
+    // Lorna Kirkbride is a *repeat* customer, which is what makes this
+    // coherent: we finished her exterior two days ago, the neighbours watched
+    // the crew do it, and she liked it enough to book Thursday's estimate for
+    // interior work. The card's "booked yesterday" and "Estimator on site
+    // Thu" describe that upcoming job; this row describes the finished one.
+    // Without it the neighbour campaign would be claiming a completion that
+    // no record supports.
+    id: "tp-r8-job",
+    dealId: "r8",
+    accountId: accountIdFor("r8"),
+    channel: "JOB",
+    body: "Exterior repaint completed — siding, trim and front door · $9,250",
+    who: "WOW OS Funnel",
+    byAgent: false,
+    initials: "OS",
+    userId: null,
+    agentId: null,
+    structured: [
+      { label: "SCOPE", value: "Siding, trim, front door" },
+      { label: "VALUE", value: "$9,250" },
+      { label: "CREW", value: "Kris Jolin crew" },
+    ],
+    occurredAt: daysAgo(2),
+  },
   {
     id: "tp-r5-promo",
     dealId: "r5",
@@ -666,9 +826,11 @@ const eventTouchpoints: TouchpointRow[] = [
 ];
 
 const touchpointRows: TouchpointRow[] = [
-  ...DEAL_FIXTURES.flatMap((d) =>
-    d.id === HERO_ID ? heroTouchpoints() : genericTouchpoints(d),
-  ),
+  ...DEAL_FIXTURES.flatMap((d) => {
+    if (d.id === HERO_ID) return heroTouchpoints();
+    if (d.pipe === "newleads") return newLeadTouchpoints(d);
+    return genericTouchpoints(d);
+  }),
   ...eventTouchpoints,
 ];
 
@@ -747,6 +909,56 @@ const seedOwnedTouchpointIds = [
 /** The ids a `--fresh` wipe must preserve: everything this run writes. */
 const allSeedTouchpointIds = [
   ...new Set([...seedOwnedTouchpointIds, ...touchpointRows.map((t) => t.id)]),
+];
+
+/**
+ * The houses around 2308 Tunlaw Rd NW, where r8's crew is working.
+ *
+ * Three have already become leads; two are unworked, which is what gives the
+ * neighbour trigger something real to fire on. Addresses are data, never
+ * derived — see the `canvass_targets` docblock.
+ */
+const canvassTargetRows = [
+  {
+    id: "cv-r8-2310",
+    sourceDealId: "r8",
+    address: "2310 Tunlaw Rd NW",
+    status: "pending",
+    dealId: null,
+    notes: "Asked about her trim while the crew was masking.",
+  },
+  {
+    id: "cv-r8-2312",
+    sourceDealId: "r8",
+    address: "2312 Tunlaw Rd NW",
+    status: "pending",
+    dealId: null,
+    notes: "Flagged the crew down on the pavement.",
+  },
+  {
+    id: "cv-r8-2304",
+    sourceDealId: "r8",
+    address: "2304 Tunlaw Rd NW",
+    status: "pending",
+    dealId: null,
+    notes: "Wants the same colour as 2308.",
+  },
+  {
+    id: "cv-r8-2306",
+    sourceDealId: "r8",
+    address: "2306 Tunlaw Rd NW",
+    status: "pending",
+    dealId: null,
+    notes: "Next door — directly adjoining, watched the whole exterior job.",
+  },
+  {
+    id: "cv-r8-2314",
+    sourceDealId: "r8",
+    address: "2314 Tunlaw Rd NW",
+    status: "pending",
+    dealId: null,
+    notes: "Three doors down, same terrace — weathered south elevation.",
+  },
 ];
 
 /* -------------------------------------------------------------------------
@@ -894,6 +1106,65 @@ async function main() {
     }
   }
 
+  // Deals the seed used to own and no longer writes — the New Leads set was
+  // eight fixtures before Marshall's board specified five. Upserting alone
+  // would leave the extra three on the board forever. Matched on the fixture
+  // id shape (`r1`, `c3`, `n8`); runtime leads are `nl-<uuid>` and are never
+  // swept, so nothing `createDeal` produced is at risk.
+  const currentDealIds = new Set(DEAL_FIXTURES.map((d) => d.id));
+  const strayDeals = await db
+    .select({ id: schema.deals.id })
+    .from(schema.deals)
+    .where(sql`${schema.deals.id} ~ '^[rcbpn][0-9]+$'`);
+  const strayIds = strayDeals
+    .map((d) => d.id)
+    .filter((id) => !currentDealIds.has(id));
+
+  if (strayIds.length) {
+    // Nothing may point at a deal that is about to stop existing.
+    await db
+      .update(schema.canvassTargets)
+      .set({ dealId: null, status: "pending" })
+      .where(inArray(schema.canvassTargets.dealId, strayIds));
+    await db
+      .update(schema.deals)
+      .set({ sourcedFromDealId: null })
+      .where(inArray(schema.deals.sourcedFromDealId, strayIds));
+    await db
+      .delete(schema.auditEvents)
+      .where(inArray(schema.auditEvents.entityId, strayIds));
+    await db.delete(schema.deals).where(inArray(schema.deals.id, strayIds));
+    await db
+      .delete(schema.accounts)
+      .where(inArray(schema.accounts.id, strayIds.map(accountIdFor)));
+    console.log(
+      `Removed ${strayIds.length} deal(s) the seed no longer writes: ${strayIds.join(", ")}`,
+    );
+  }
+
+  // Accounts whose deal is gone. Every account in this model belongs to a
+  // deal, so one with no deal is unreachable — the Record screen is only ever
+  // entered through a deal. These accumulate from deleted test leads.
+  const orphanAccounts = await db.execute<{ id: string }>(sql`
+    delete from accounts a
+     where not exists (select 1 from deals d where d.account_id = a.id)
+    returning a.id
+  `);
+  const orphanRows = Array.isArray(orphanAccounts)
+    ? orphanAccounts
+    : orphanAccounts.rows;
+  if (orphanRows.length) {
+    console.log(`Removed ${orphanRows.length} account(s) with no deal.`);
+  }
+
+  await db
+    .insert(schema.canvassTargets)
+    .values(canvassTargetRows)
+    .onConflictDoUpdate({
+      target: schema.canvassTargets.id,
+      set: overwrite(schema.canvassTargets, ["id", "createdAt"]),
+    });
+
   await db
     .insert(schema.approvals)
     .values(approvalRows)
@@ -968,6 +1239,7 @@ async function main() {
     union all select 'promos', count(*)::int from promos
     union all select 'deals', count(*)::int from deals
     union all select 'touchpoints', count(*)::int from touchpoints
+    union all select 'canvass_targets', count(*)::int from canvass_targets
     union all select 'approvals', count(*)::int from approvals
     union all select 'audit_events', count(*)::int from audit_events
   `);
@@ -997,6 +1269,18 @@ async function main() {
     process.exit(1);
   }
   console.log("\n  last_touch_at agrees with the newest touchpoint on every deal.");
+
+  // The one thing in this dataset that expires. Everything else is measured in
+  // days or months and survives a long demo; the speed-to-lead pair is
+  // measured in minutes, so n1 stops being the healthy example roughly a
+  // quarter of an hour after this runs. Printing the wall-clock deadline beats
+  // expecting whoever is driving to remember.
+  const slaExpiresAt = new Date(NOW.getTime() + 15 * 60_000);
+  const hh = String(slaExpiresAt.getHours()).padStart(2, "0");
+  const mm = String(slaExpiresAt.getMinutes()).padStart(2, "0");
+  console.log(
+    `  New Leads SLA: n1 reads as on-track until ~${hh}:${mm} local. Re-seed if you demo after that.`,
+  );
 }
 
 main().catch((err) => {

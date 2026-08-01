@@ -118,6 +118,7 @@ export const seasonalTrigger: TriggerDefinition<SeasonalFacts> = {
   type: "seasonal",
   label: "Seasonal promo",
   agentId: "agent-remarketing",
+  outcome: "draft",
   evaluate: evaluateSeasonal,
   title: (f) => `Seasonal promo follow-up · ${f.contact.name}`,
   // "15% spring interior offer sent 3 days ago · expires Aug 15"

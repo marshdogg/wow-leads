@@ -11,7 +11,7 @@
    Pipelines, stages, tracks
    ------------------------------------------------------------------------- */
 
-export type PipelineId = "resi" | "comm" | "bizdev" | "partner";
+export type PipelineId = "resi" | "comm" | "bizdev" | "partner" | "newleads";
 
 export type ResiStageId =
   | "past"
@@ -29,14 +29,30 @@ export type CommStageId =
   | "hold";
 export type BizdevStageId = "initial" | "followup" | "meeting";
 export type PartnerStageId = "identified" | "introduced" | "active" | "dormant";
+/** Net-new demand. Speed is the whole game, hence the short ladder. */
+export type NewLeadStageId =
+  | "new"
+  | "contacted"
+  | "qualified"
+  | "booked"
+  | "nurture";
 
 export type StageId =
   | ResiStageId
   | CommStageId
   | BizdevStageId
-  | PartnerStageId;
+  | PartnerStageId
+  | NewLeadStageId;
 
-export type TrackId = "referral" | "repeat" | "revival";
+/**
+ * Residential tracks describe *why* we're re-approaching someone; New Leads
+ * tracks describe *how the lead arrived*. Both drive a coloured chip and a
+ * filter, so they share one type — but the sets are per-pipeline, see
+ * `PipelineConfig.trackOptions`.
+ */
+export type ResiTrackId = "referral" | "repeat" | "revival";
+export type NewLeadTrackId = "inbound" | "canvassed" | "event";
+export type TrackId = ResiTrackId | NewLeadTrackId;
 export type TrackFilterId = "all" | TrackId;
 
 export interface StageConfig {
@@ -49,10 +65,19 @@ export interface StageConfig {
   titleColor?: string;
 }
 
+/**
+ * Rail grouping. Re-marketing and New Leads are both residential — one works
+ * people we've already served, the other people we haven't — so they sit
+ * together under one heading rather than as peers of the commercial pipelines.
+ */
+export type PipelineCategory = "RESIDENTIAL LEADS" | "COMMERCIAL";
+
 export interface PipelineConfig {
   id: PipelineId;
-  /** Short label used on the pipeline selector card. */
+  /** Short label used in the rail and on the selector card. */
   label: string;
+  /** Which rail group this pipeline sits under, and the board's eyebrow. */
+  category: PipelineCategory;
   /** Meta line under the selector label. */
   meta: string;
   /** Selector dot colour. */
@@ -63,8 +88,10 @@ export interface PipelineConfig {
   sub: string;
   /** Filter dropdown label. */
   filter: string;
-  /** Residential is the only pipeline with tracks. */
+  /** Whether this pipeline shows the track segmented control. */
   tracks: boolean;
+  /** The track filter options, including "All". Empty when `tracks` is false. */
+  trackOptions: { id: TrackFilterId; label: string }[];
   /** Column headers show a `$XXXK in stage` roll-up (Commercial only). */
   showStageValue: boolean;
   /** Days without a touchpoint before a deal counts as neglected. */
@@ -150,6 +177,12 @@ export interface Deal {
   /** Residential Result, parked: when to retry. */
   retryAt?: string | null;
   accountId?: string | null;
+  /**
+   * The job that produced this lead — a neighbour who asked about their trim
+   * while we were painting next door. Makes "this $8,400 job generated three
+   * leads worth $14K" a query rather than a guess.
+   */
+  sourcedFromDealId?: string | null;
 }
 
 export type LeadSource =
@@ -160,7 +193,14 @@ export type LeadSource =
   | "Cold Call"
   | "Web Form"
   | "Door Hanger"
-  | "GC Referral";
+  | "GC Referral"
+  // Local-area marketing and net-new demand.
+  | "Facebook Ads"
+  | "Instagram Ads"
+  | "Trade Show"
+  | "Canvassing"
+  | "Job Site"
+  | "Neighbor Letter";
 
 export type DealAction =
   | "Review draft"
@@ -230,7 +270,19 @@ export interface Touchpoint {
    Triggers and approvals
    ------------------------------------------------------------------------- */
 
-export type TriggerType = "eleven_month" | "seasonal" | "revival" | "sequence";
+/**
+ * `speed_to_lead` is the odd one out and deliberately so: it is the only
+ * trigger that does not draft anything for a customer. See
+ * `lib/triggers/speed-to-lead.ts` for why it never reaches the Approvals
+ * queue.
+ */
+export type TriggerType =
+  | "eleven_month"
+  | "seasonal"
+  | "revival"
+  | "sequence"
+  | "speed_to_lead"
+  | "neighbour_campaign";
 
 export type ApprovalStatus =
   | "drafted"

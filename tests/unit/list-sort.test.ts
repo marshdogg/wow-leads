@@ -54,6 +54,11 @@ describe("sortValue", () => {
       ["referral", "REFERRAL"],
       ["repeat", "REPEAT WORK"],
       ["revival", "REVIVAL"],
+      // New Leads tracks go through the same lookup — nothing here is pinned
+      // to the Residential set.
+      ["inbound", "INBOUND"],
+      ["canvassed", "CANVASSED"],
+      ["event", "EVENT"],
     ];
     for (const [track, label] of tracks) {
       expect(sortValue(deal({ id: track, track }), "track", RESI_STAGES)).toBe(
@@ -143,6 +148,40 @@ describe("sortDeals — all six keys, both directions", () => {
       "repeat",
       "referral",
     ]);
+  });
+
+  it("sorts New Leads tracks by chip label, untracked still last", () => {
+    const deals = [
+      deal({ id: "untracked", pipe: "newleads", track: null }),
+      deal({ id: "inbound", pipe: "newleads", track: "inbound" }),
+      deal({ id: "event", pipe: "newleads", track: "event" }),
+      deal({ id: "canvassed", pipe: "newleads", track: "canvassed" }),
+    ];
+    expect(order(deals, "track", 1)).toEqual([
+      "canvassed",
+      "event",
+      "inbound",
+      "untracked",
+    ]);
+    expect(order(deals, "track", -1)).toEqual([
+      "untracked",
+      "inbound",
+      "event",
+      "canvassed",
+    ]);
+  });
+
+  it("sorts by stage in pipeline order for any pipeline's stage list", () => {
+    const stages = stageIds("newleads");
+    const deals = [
+      deal({ id: "nurture", pipe: "newleads", stage: "nurture" }),
+      deal({ id: "new", pipe: "newleads", stage: "new" }),
+      deal({ id: "qualified", pipe: "newleads", stage: "qualified" }),
+    ];
+    const ids = sortDeals(deals, { key: "stage", dir: 1 }, stages).map(
+      (d) => d.id,
+    );
+    expect(ids).toEqual(["new", "qualified", "nurture"]);
   });
 
   it("sorts by stage in pipeline order, not alphabetically", () => {

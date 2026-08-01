@@ -1,7 +1,6 @@
 "use client";
 
 import { ChevronDown, ChevronUp, Columns3, List } from "lucide-react";
-import { TRACKS } from "@/lib/pipelines";
 import type { BoardView, PipelineConfig, TrackFilterId } from "@/lib/types";
 
 /**
@@ -42,6 +41,20 @@ export function BoardHeader({
       }}
     >
       <div style={{ minWidth: 0 }}>
+        {/* The rail groups pipelines under this category, so the title drops
+            the "Residential" half and the eyebrow carries it here. */}
+        <div
+          data-testid="board-category"
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: "0.9px",
+            color: "#6f7a6f",
+            marginBottom: 6,
+          }}
+        >
+          {pipeline.category}
+        </div>
         <h1
           data-testid="board-title"
           style={{
@@ -72,7 +85,10 @@ export function BoardHeader({
           flexWrap: "wrap",
         }}
       >
-        {pipeline.tracks && (
+        {/* Track sets are per-pipeline: Residential has referral/repeat/
+            revival, New Leads has its own sources, the rest have none and
+            render no control at all. */}
+        {pipeline.trackOptions.length > 0 && (
           <div
             role="group"
             aria-label="Track filter"
@@ -87,7 +103,7 @@ export function BoardHeader({
               gap: 3,
             }}
           >
-            {TRACKS.map((t) => (
+            {pipeline.trackOptions.map((t) => (
               <SegmentedItem
                 key={t.id}
                 active={track === t.id}

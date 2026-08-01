@@ -1,5 +1,5 @@
 import { createLoader, parseAsStringLiteral } from "nuqs/server";
-import { PIPELINE_IDS } from "@/lib/pipelines";
+import { PIPELINE_IDS, PIPES } from "@/lib/pipelines";
 import type { BoardView, PipelineId, TrackFilterId } from "@/lib/types";
 
 /**
@@ -11,7 +11,22 @@ import type { BoardView, PipelineId, TrackFilterId } from "@/lib/types";
  * re-render what the client already holds, so they stay shallow and instant.
  */
 
-const TRACK_FILTER_IDS = ["all", "referral", "repeat", "revival"] as const;
+/**
+ * Every track id any pipeline offers, derived rather than re-listed — a new
+ * pipeline with new tracks widens the accepted URL values on its own.
+ *
+ * `PIPES` is the seeded config rather than the database, which is right here:
+ * a parser is a module-level constant and can't await a query, and `PIPES` is
+ * the canonical starting state. `"all"` is seeded explicitly so the parser's
+ * own default stays valid even if no pipeline currently has tracks.
+ */
+const TRACK_FILTER_IDS: TrackFilterId[] = Array.from(
+  new Set<TrackFilterId>([
+    "all",
+    ...Object.values(PIPES).flatMap((p) => p.trackOptions.map((t) => t.id)),
+  ]),
+);
+
 const BOARD_VIEWS = ["board", "list"] as const;
 
 export const pipelineParser = parseAsStringLiteral(

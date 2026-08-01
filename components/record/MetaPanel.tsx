@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { RECORD_FIELDS } from "@/lib/record-fields";
 import { Panel, SectionLabel } from "./Panel";
 import type { MetaRow } from "./view-model";
@@ -19,6 +20,7 @@ export function MetaPanel({ rows }: { rows: MetaRow[] }) {
         {rows.map((m) => (
           <div
             key={m.key}
+            data-testid={m.testId}
             style={{
               display: "flex",
               alignItems: "baseline",
@@ -27,9 +29,19 @@ export function MetaPanel({ rows }: { rows: MetaRow[] }) {
             }}
           >
             <div style={{ fontSize: 12, color: "#6f7a6f" }}>{m.label}</div>
-            <div style={{ fontSize: 13, color: m.color, textAlign: "right" }}>
-              {m.value}
-            </div>
+            {m.href ? (
+              <Link
+                href={m.href}
+                className="hover:!underline"
+                style={{ fontSize: 13, color: m.color, textAlign: "right" }}
+              >
+                {m.value}
+              </Link>
+            ) : (
+              <div style={{ fontSize: 13, color: m.color, textAlign: "right" }}>
+                {m.value}
+              </div>
+            )}
           </div>
         ))}
       </div>

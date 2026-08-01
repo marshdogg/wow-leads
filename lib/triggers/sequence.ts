@@ -95,6 +95,7 @@ export const sequenceTrigger: TriggerDefinition<SequenceFacts> = {
   type: "sequence",
   label: "Sequence step",
   agentId: "agent-prospecting",
+  outcome: "draft",
   evaluate: evaluateSequence,
   title: (f) => `Sequence step ${f.stepNumber} · ${f.contact.name}`,
   // "Northgate Development · Commercial 4-touch · Biz Dev"

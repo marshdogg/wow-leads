@@ -7,6 +7,7 @@ import { MetaPanel } from "./MetaPanel";
 import { NextStepPanel } from "./NextStepPanel";
 import { PropertyPanel } from "./PropertyPanel";
 import { RecordActions } from "./RecordActions";
+import { SourcedLeads, type SourcedLead } from "./SourcedLeads";
 import { suggestionBodies } from "./suggestion-copy";
 import { SuggestionsPanel } from "./SuggestionsPanel";
 import {
@@ -14,6 +15,7 @@ import {
   metaRows,
   nextStepStyle,
   orderedContacts,
+  type OriginJob,
   type RecordView,
 } from "./view-model";
 
@@ -21,7 +23,20 @@ import {
  * The Account record: one page holding the account, its contacts, the site
  * detail a crew needs, and every touch anyone — person or agent — has made.
  */
-export function RecordScreen({ view }: { view: RecordView }) {
+export function RecordScreen({
+  view,
+  origin = null,
+  sourcedLeads = [],
+  sourcedLeadsValue = "$0",
+}: {
+  view: RecordView;
+  /** The job this lead came off, if it came off one. */
+  origin?: OriginJob | null;
+  /** Leads this record produced — populated when this record is the job. */
+  sourcedLeads?: SourcedLead[];
+  /** Their combined value, summed from raw metrics by the repository. */
+  sourcedLeadsValue?: string;
+}) {
   const { deal, account } = view;
   const tags = accountTags(view);
   const contacts = orderedContacts(view.contacts);
@@ -66,7 +81,11 @@ export function RecordScreen({ view }: { view: RecordView }) {
           >
             {RECORD_FIELDS.accountEyebrow}
           </div>
+          {/* On a job record the account name *is* the address line, which is
+              what the attribution e2e reads to match against a lead's origin
+              row. Hence one element, both roles. */}
           <h1
+            data-testid="account-line"
             style={{
               fontSize: 30,
               fontWeight: 600,
@@ -126,10 +145,11 @@ export function RecordScreen({ view }: { view: RecordView }) {
             accessNotes={view.accessNotes}
           />
           <ActivityTimeline timeline={view.timeline} />
+          <SourcedLeads leads={sourcedLeads} totalValue={sourcedLeadsValue} />
         </div>
 
         <div className="flex min-w-0 flex-col" style={{ gap: 18 }}>
-          <MetaPanel rows={metaRows(view)} />
+          <MetaPanel rows={metaRows(view, origin)} />
           <NextStepPanel dealId={deal.id} style={nextStepStyle(deal)} />
           <SuggestionsPanel
             dealId={deal.id}

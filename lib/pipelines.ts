@@ -18,18 +18,37 @@ import type {
   BookingDay,
 } from "./types";
 
-export const PIPELINE_IDS: PipelineId[] = ["resi", "comm", "bizdev", "partner"];
+export const PIPELINE_IDS: PipelineId[] = [
+  "resi",
+  "comm",
+  "bizdev",
+  "partner",
+  "newleads",
+];
+
+const RESI_TRACKS: { id: TrackFilterId; label: string }[] = [
+  { id: "all", label: "All tracks" },
+  { id: "referral", label: "Referral" },
+  { id: "repeat", label: "Repeat work" },
+  { id: "revival", label: "Revival" },
+];
+
+// New Leads deliberately has no track control — the source is a card metric
+// and the dropdown filters it. The `inbound | canvassed | event` chip styles
+// stay in TRACK_STYLE for the AUTOMATED fallback and any future use.
 
 export const PIPES: Record<PipelineId, PipelineConfig> = {
   resi: {
     id: "resi",
-    label: "Residential Re-marketing",
+    label: "Re-marketing",
+    category: "RESIDENTIAL LEADS",
     meta: "Fast · past customers & revival",
     dot: "#7ed321",
     title: "Residential Re-marketing",
     sub: "Referral, repeat-work and revival tracks — the highest-margin pipeline we already own.",
     filter: "All tracks · All sources",
     tracks: true,
+    trackOptions: RESI_TRACKS,
     showStageValue: false,
     neglectDays: 14,
     stages: [
@@ -49,12 +68,14 @@ export const PIPES: Record<PipelineId, PipelineConfig> = {
   comm: {
     id: "comm",
     label: "Commercial Bid",
+    category: "COMMERCIAL",
     meta: "Slow · GC, PM, HOA",
     dot: "#7fb2e0",
     title: "Commercial Bid",
     sub: "Long-cycle bids. On-Hold is a real state, not a failure.",
     filter: "All accounts · All tags",
     tracks: false,
+    trackOptions: [],
     showStageValue: true,
     // Commercial cycles run months, not weeks. See DECISIONS.md #3.
     neglectDays: 45,
@@ -80,12 +101,14 @@ export const PIPES: Record<PipelineId, PipelineConfig> = {
   bizdev: {
     id: "bizdev",
     label: "Biz Dev / Prospecting",
+    category: "COMMERCIAL",
     meta: "Pre-sales · sequences",
     dot: "#b19ad6",
     title: "Biz Dev / Prospecting",
     sub: "Multi-touch sequences generate the tasks. Hands off to Commercial or Residential at first meeting.",
     filter: "All industries · All reps",
     tracks: false,
+    trackOptions: [],
     showStageValue: false,
     neglectDays: 14,
     stages: [
@@ -106,12 +129,14 @@ export const PIPES: Record<PipelineId, PipelineConfig> = {
   partner: {
     id: "partner",
     label: "Industry Partner",
+    category: "COMMERCIAL",
     meta: "Relationship · referrers",
     dot: "#e0a52b",
     title: "Industry Partner network",
     sub: "Not a deal pipeline — a relationship one. The scoreboard is referrals sent and revenue attributed.",
     filter: "All partner types",
     tracks: false,
+    trackOptions: [],
     showStageValue: false,
     neglectDays: 14,
     stages: [
@@ -131,15 +156,62 @@ export const PIPES: Record<PipelineId, PipelineConfig> = {
       },
     ],
   },
+  newleads: {
+    id: "newleads",
+    label: "New Leads",
+    category: "RESIDENTIAL LEADS",
+    meta: "Net-new · ads, canvassing, job sites",
+    dot: "#e0673f",
+    title: "New Leads",
+    sub: "Net-new residential enquiries — ads, canvassing and job-site walk-ups. Speed to first contact is the whole game.",
+    filter: "All sources · All reps",
+    // No track chips here: the source is surfaced as a card metric instead,
+    // and the dropdown filters it. NEW_LEAD_TRACKS stays defined for the chip
+    // styles the seed still uses.
+    tracks: false,
+    trackOptions: [],
+    showStageValue: false,
+    // A fresh paid lead going cold overnight is a catastrophe, not a warning.
+    // Every other pipeline measures neglect in weeks; this one measures it in
+    // a day. See DECISIONS.md.
+    neglectDays: 1,
+    stages: [
+      { id: "new", label: "New / Untouched", hint: "Clock is running" },
+      { id: "contacted", label: "Contacted", hint: "First attempt made" },
+      {
+        id: "qualified",
+        label: "Qualified",
+        hint: "Real job, real budget",
+      },
+      {
+        id: "booked",
+        label: "Estimate Booked",
+        hint: "Handed to the Funnel",
+        positive: true,
+      },
+      {
+        id: "nurture",
+        label: "Nurture",
+        hint: "Not now — parked with a retry date",
+        titleColor: "#c9a29a",
+      },
+    ],
+  },
 };
 
-export const TRACKS: { id: TrackFilterId; label: string }[] = [
-  { id: "all", label: "All tracks" },
-  { id: "referral", label: "Referral" },
-  { id: "repeat", label: "Repeat work" },
-  { id: "revival", label: "Revival" },
-];
+/**
+ * @deprecated Read `PIPES[pipe].trackOptions` instead — track sets are
+ * per-pipeline now that New Leads has its own. Kept as the Residential set so
+ * existing callers keep working.
+ */
+export const TRACKS = RESI_TRACKS;
 
+/**
+ * Track chips reuse the existing accent vocabulary rather than inventing one:
+ * green is active work we own, amber is paused-not-dead, blue is demand that
+ * arrived from outside, and the muted violet matches the Biz Dev dot for the
+ * one track that comes out of an event rather than a place.
+ */
 export const TRACK_STYLE: Record<TrackId, TrackStyle> = {
   referral: {
     bg: "#101a0b",
@@ -158,6 +230,24 @@ export const TRACK_STYLE: Record<TrackId, TrackStyle> = {
     color: "#d8b45e",
     border: "#4a3a17",
     label: "REVIVAL",
+  },
+  inbound: {
+    bg: "#16283a",
+    color: "#7fb2e0",
+    border: "#24455f",
+    label: "INBOUND",
+  },
+  canvassed: {
+    bg: "#101a0b",
+    color: "#a8ea6b",
+    border: "#2f6b1f",
+    label: "CANVASSED",
+  },
+  event: {
+    bg: "#1e1a2b",
+    color: "#b19ad6",
+    border: "#3a3154",
+    label: "EVENT",
   },
 };
 

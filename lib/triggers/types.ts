@@ -184,11 +184,83 @@ export interface SequenceFacts {
   now: Date;
 }
 
+/* -------------------------------------------------------------------------
+   New Leads
+   ------------------------------------------------------------------------- */
+
+/** How badly a fresh lead is past its speed-to-lead SLA. */
+export type SpeedToLeadSeverity = "on_track" | "warn" | "breach";
+
+export interface SpeedToLeadFacts {
+  kind: "speed_to_lead";
+  dealId: string;
+  dealName: string;
+  contact: ContactFacts;
+  /** When the lead came in. Null means the record cannot support this trigger. */
+  arrivedAt: Date | null;
+  /** First time a person tried to reach them. Null = still unworked. */
+  firstContactAt: Date | null;
+  /** Must still be sitting in the `new` stage. */
+  stageId: string;
+  /** "Facebook Ads", "Door Hanger", … */
+  source: string;
+  /** Paid demand — the cost per lead is already spent, so silence is waste. */
+  paid: boolean;
+  /** Who is on the hook. */
+  ownerName: string;
+  ownerUserId: string | null;
+  now: Date;
+}
+
+export interface NeighbourCampaignFacts {
+  kind: "neighbour_campaign";
+  /** The completed job this outreach is justified by. */
+  dealId: string;
+  dealName: string;
+  contact: ContactFacts;
+  /** "2308 Tunlaw Rd NW" — the job we can point at. */
+  jobAddress: string;
+  jobCompletedAt: Date | null;
+  scope: ScopeFacts;
+  /** "Kris Jolin crew". Null when the record does not name one. */
+  crewName: string | null;
+  /** How long the crew is still in the street. Null when unknown. */
+  crewOnSiteUntil: Date | null;
+  /** The single address this draft is for — one approval per neighbour. */
+  neighbourAddress: string;
+  /** The `canvass_targets` row, so the runner can advance its status. */
+  canvassTargetId: string;
+  /** "two doors down", only if the canvass list records it. */
+  proximity: string | null;
+  /** True when this address is already a lead or a customer. */
+  alreadyKnown: boolean;
+  now: Date;
+}
+
 export type TriggerFacts =
   | ElevenMonthFacts
   | SeasonalFacts
   | RevivalFacts
-  | SequenceFacts;
+  | SequenceFacts
+  | SpeedToLeadFacts
+  | NeighbourCampaignFacts;
+
+/**
+ * What firing a trigger produces.
+ *
+ * `draft` puts a message in the Approvals queue, where a human decides
+ * whether it reaches a customer. `escalate` writes an internal alert — a
+ * touchpoint, an audit event and an urgent next action — and never touches
+ * the queue.
+ *
+ * This is a discriminator rather than a comment because the guarantee the
+ * Approvals screen makes ("nothing sends until you approve it") is only worth
+ * anything if the queue contains *exclusively* things that would send. An
+ * internal nudge that was never going to reach a customer dilutes that
+ * promise, so the runner branches on this field and cannot route an
+ * escalation into the approvals table by accident.
+ */
+export type TriggerOutcome = "draft" | "escalate";
 
 /**
  * A trigger module: the pure predicate plus the metadata the drafting and
@@ -199,6 +271,7 @@ export interface TriggerDefinition<F extends TriggerFacts> {
   label: string;
   /** Which agent owns drafts from this trigger. */
   agentId: AgentId;
+  outcome: TriggerOutcome;
   evaluate: (facts: F) => TriggerEvaluation;
   /** Card title: "11-Month Touchpoint · Delia Marchetti". */
   title: (facts: F) => string;

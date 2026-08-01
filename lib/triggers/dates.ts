@@ -146,3 +146,8 @@ export function seasonName(date: Date): string {
   return "fall";
 }
 
+
+/** Whole minutes between two instants, floored. */
+export function minutesBetween(from: Date, to: Date): number {
+  return Math.floor((to.getTime() - from.getTime()) / 60_000);
+}

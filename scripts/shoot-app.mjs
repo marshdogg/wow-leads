@@ -125,8 +125,11 @@ async function main() {
   watch(page, "1440");
 
   for (const shot of DESKTOP_ROUTES) {
-    await page.goto(`${BASE}${shot.path}`, { waitUntil: "networkidle" });
-    await page.waitForTimeout(900);
+    // Not `networkidle`: the rail's nine <Link>s prefetch continuously, so the
+    // network never goes idle and the wait times out.
+    await page.goto(`${BASE}${shot.path}`, { waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("load");
+    await page.waitForTimeout(1200);
     await page.screenshot({
       path: join(OUT, `${shot.name}.png`),
       fullPage: true,
@@ -145,8 +148,9 @@ async function main() {
   watch(phone, "390");
 
   for (const shot of PHONE_ROUTES) {
-    await phone.goto(`${BASE}${shot.path}`, { waitUntil: "networkidle" });
-    await phone.waitForTimeout(900);
+    await phone.goto(`${BASE}${shot.path}`, { waitUntil: "domcontentloaded" });
+    await phone.waitForLoadState("load");
+    await phone.waitForTimeout(1200);
     await phone.screenshot({
       path: join(OUT, `${shot.name}.png`),
       fullPage: true,

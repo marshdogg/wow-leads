@@ -6,18 +6,22 @@ import {
   approvals,
   contacts,
   deals,
+  canvassTargets,
   promos,
   sequenceSteps,
   sequences,
   touchpoints,
 } from "@/db/schema";
 import { isCustomerContactChannel } from "@/lib/repositories/rules";
+import { isPaidSource } from "./speed-to-lead";
 import type { ContactChannel, TriggerType } from "@/lib/types";
 import { monthName } from "./dates";
 import {
   dayInSequence,
   isAbsent,
   jobScopeAreas,
+  jobWorkType,
+  proximityFrom,
   parseInitialType,
   parseMonthDay,
   parseMonthYear,
@@ -34,9 +38,11 @@ import type {
   ReplyFacts,
   RevivalFacts,
   ScopeFacts,
+  NeighbourCampaignFacts,
   SeasonalFacts,
   SequenceFacts,
   SequenceReference,
+  SpeedToLeadFacts,
 } from "./types";
 
 /**
@@ -68,6 +74,7 @@ type PromoRow = typeof promos.$inferSelect;
 type SequenceRow = typeof sequences.$inferSelect;
 type SequenceStepRow = typeof sequenceSteps.$inferSelect;
 type ApprovalRow = typeof approvals.$inferSelect;
+type CanvassTargetRow = typeof canvassTargets.$inferSelect;
 
 export interface FactContext {
   now: Date;
@@ -80,6 +87,8 @@ export interface FactContext {
   sequencesById: Map<string, SequenceRow>;
   stepsBySequence: Map<string, SequenceStepRow[]>;
   approvalsByDeal: Map<string, ApprovalRow[]>;
+  /** Addresses to canvass, keyed by the job whose crew the neighbours can see. */
+  canvassByDeal: Map<string, CanvassTargetRow[]>;
 }
 
 export async function loadFactContext(now: Date): Promise<FactContext> {
@@ -104,6 +113,7 @@ export async function loadFactContext(now: Date): Promise<FactContext> {
     sequenceRows,
     stepRows,
     approvalRows,
+    canvassRows,
   ] = await Promise.all([
     accountIds.length
       ? db.select().from(accounts).where(inArray(accounts.id, accountIds))
@@ -135,6 +145,12 @@ export async function loadFactContext(now: Date): Promise<FactContext> {
     dealIds.length
       ? db.select().from(approvals).where(inArray(approvals.dealId, dealIds))
       : [],
+    dealIds.length
+      ? db
+          .select()
+          .from(canvassTargets)
+          .where(inArray(canvassTargets.sourceDealId, dealIds))
+      : [],
   ]);
 
   return {
@@ -148,6 +164,7 @@ export async function loadFactContext(now: Date): Promise<FactContext> {
     sequencesById: byId(sequenceRows, (r) => r.id),
     stepsBySequence: groupBy(stepRows, (r) => r.sequenceId),
     approvalsByDeal: groupBy(approvalRows, (r) => r.dealId),
+    canvassByDeal: groupBy(canvassRows, (r) => r.sourceDealId),
   };
 }
 
@@ -250,7 +267,9 @@ function scopeFacts(
   deal: DealRow,
   job?: TouchpointRow,
 ): ScopeFacts {
-  const workType = workTypeOf(deal);
+  // What the completion record says was painted beats what the card is
+  // tagged: the tag describes the account, the JOB row describes the job.
+  const workType = jobWorkType(job) ?? workTypeOf(deal);
   // What this job actually covered beats what the account generally is.
   const areas = jobScopeAreas(job);
   return {
@@ -561,3 +580,136 @@ function groupBy<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {
 }
 
 export * from "./record-parse";
+
+/* -------------------------------------------------------------------------
+   Speed to lead
+   ------------------------------------------------------------------------- */
+
+export function speedToLeadFacts(
+  ctx: FactContext,
+  deal: DealRow,
+): SpeedToLeadFacts | null {
+  if (deal.pipelineId !== "newleads") return null;
+
+  const events = dealTouchpoints(ctx, deal);
+  // The lead's arrival: the SOURCE row that records it landing, else the row
+  // creation time. Both are real timestamps — this clock is never parsed out
+  // of a display string, because minutes matter here.
+  const sourceEvent = events.find((t) => t.channel.toUpperCase() === "SOURCE");
+  const arrivedAt = sourceEvent?.occurredAt ?? deal.createdAt;
+
+  return {
+    kind: "speed_to_lead",
+    dealId: deal.id,
+    dealName: deal.name,
+    contact: contactFacts(ctx, deal),
+    arrivedAt,
+    firstContactAt: firstHumanContactAt(ctx, deal),
+    stageId: deal.stageId,
+    source: deal.source,
+    paid: isPaidSource(deal.source),
+    ownerName: deal.ownerName,
+    ownerUserId: deal.ownerUserId,
+    now: ctx.now,
+  };
+}
+
+/** The first time a person tried to reach them, agents excluded. */
+function firstHumanContactAt(ctx: FactContext, deal: DealRow): Date | null {
+  const human = dealTouchpoints(ctx, deal).filter(
+    (t) => isCustomerContactChannel(t.channel.toUpperCase()) && !t.byAgent,
+  );
+  return human.length ? human[0].occurredAt : null;
+}
+
+/* -------------------------------------------------------------------------
+   Neighbour campaign
+   ------------------------------------------------------------------------- */
+
+/**
+ * One fact object per unworked address on the completed job's canvass list.
+ *
+ * The addresses are data, never derived. Generating neighbouring street
+ * numbers arithmetically would fabricate addresses for messages that go to
+ * real houses, so the source is the `canvass_targets` table and a job with no
+ * rows there simply does not fire.
+ */
+export function neighbourCampaignFacts(
+  ctx: FactContext,
+  deal: DealRow,
+): NeighbourCampaignFacts[] {
+  const targets = (ctx.canvassByDeal.get(deal.id) ?? []).filter(
+    // `created` already became a lead, `skipped` was declined by a human.
+    // Either way the decision has been made and re-drafting would undo it.
+    (t) => t.status === "pending" || t.status === "drafted",
+  );
+  if (targets.length === 0) return [];
+
+  const events = dealTouchpoints(ctx, deal);
+  const jobEvent = [...events]
+    .reverse()
+    .find((t) => t.channel.toUpperCase() === "JOB");
+  if (!jobEvent) return [];
+
+  const jobAddress = deal.accountLine;
+  if (!jobAddress) return [];
+
+  const account = deal.accountId ? ctx.accountsById.get(deal.accountId) : undefined;
+  const details = account?.details ?? [];
+  const known = knownAddresses(ctx);
+  const contact = contactFacts(ctx, deal);
+  const scope = scopeFacts(ctx, deal, jobEvent);
+  const crew = crewName(details);
+  const onSiteUntil = crewOnSiteUntil(details, ctx.now);
+
+  return targets.map((target) => ({
+    kind: "neighbour_campaign" as const,
+    dealId: deal.id,
+    dealName: deal.name,
+    // A canvassed address has no contact on file; the copy opens unaddressed
+    // rather than borrowing the neighbour's name.
+    contact: { ...contact, name: "", firstName: "", address: target.address },
+    jobAddress,
+    jobCompletedAt: jobEvent.occurredAt,
+    scope,
+    crewName: crew,
+    crewOnSiteUntil: onSiteUntil,
+    neighbourAddress: target.address,
+    canvassTargetId: target.id,
+    proximity: proximityFrom(target.notes),
+    alreadyKnown:
+      Boolean(target.dealId) || known.has(normaliseAddress(target.address)),
+    now: ctx.now,
+  }));
+}
+
+function crewName(details: { label: string; value: string }[]): string | null {
+  const detail = details.find((d) => /\bcrew\b/i.test(d.label));
+  if (!detail || isAbsent(detail.value)) return null;
+  // "Kris Jolin crew · 1-day interior" → "Kris Jolin crew"
+  return detail.value.split("·")[0].trim() || null;
+}
+
+function crewOnSiteUntil(
+  details: { label: string; value: string }[],
+  now: Date,
+): Date | null {
+  const detail = details.find((d) =>
+    /\b(on site until|crew until|through)\b/i.test(d.label),
+  );
+  if (!detail || isAbsent(detail.value)) return null;
+  return parseMonthDay(detail.value, now);
+}
+
+/** Every address we already have a deal against, for the dedupe check. */
+function knownAddresses(ctx: FactContext): Set<string> {
+  return new Set(
+    ctx.deals
+      .map((d) => normaliseAddress(d.accountLine))
+      .filter((line) => line.length > 0),
+  );
+}
+
+export function normaliseAddress(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ").replace(/[.,]/g, "");
+}

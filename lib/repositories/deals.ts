@@ -3,15 +3,25 @@
  * the UI, so a drag/drop, an API call and a script all get the same answer.
  */
 
-import { and, asc, count, eq } from "drizzle-orm";
+import { and, asc, count, eq, isNotNull } from "drizzle-orm";
 import { db } from "@/db";
-import { deals, pipelines, stages, touchpoints } from "@/db/schema";
+import {
+  accounts,
+  canvassTargets,
+  deals,
+  pipelines,
+  stages,
+  touchpoints,
+  users,
+} from "@/db/schema";
 import { appendAudit } from "./audit";
 import { toDeal, type DealRow } from "./mappers";
 import {
+  AGENT_NAMES,
   assertStageInPipeline,
   compactMoney,
   daysSince,
+  formatThousands,
   isNeglected,
   metricThousands,
   rollupStageValue,
@@ -19,6 +29,40 @@ import {
 import type { Deal, DealMetric, NextActionState, PipelineId } from "@/lib/types";
 
 export { StageTransitionError } from "./rules";
+
+export interface SourcedLead {
+  id: string;
+  name: string;
+  account: string;
+  stage: string;
+  value: string;
+  track: string | null;
+}
+
+export interface SourcedLeadSummary {
+  leads: number;
+  /** Total EST. VALUE of those leads, formatted. */
+  value: string;
+}
+
+export interface JobSiteAttribution {
+  jobs: number;
+  leads: number;
+  value: string;
+  topJob: {
+    id: string;
+    /**
+     * The job's address. A job is identified by where it is — `name` on a
+     * residential deal is the homeowner, and "best performing job: Lorna
+     * Kirkbride" reads as though a person were the job.
+     */
+    account: string;
+    /** The owner's name, for the secondary line. */
+    name: string;
+    leads: number;
+    value: string;
+  } | null;
+}
 
 export interface NeglectedDeal {
   id: string;
@@ -113,7 +157,12 @@ export async function setNextAction(input: {
   due: string;
   state: NextActionState;
   dueAt?: Date | null;
-  actorUserId: string;
+  /**
+   * Exactly one. An agent escalating a breached SLA has no human behind it,
+   * and naming a user would put a false name in the provenance trail.
+   */
+  actorUserId?: string;
+  agentId?: string;
 }): Promise<Deal> {
   const before = await requireDealRow(input.dealId);
 
@@ -133,7 +182,8 @@ export async function setNextAction(input: {
     entity: "deal",
     entityId: input.dealId,
     action: "set_next_action",
-    userId: input.actorUserId,
+    userId: input.actorUserId ?? null,
+    agentId: input.agentId ?? null,
     before: {
       label: before.nextLabel,
       due: before.nextDue,
@@ -292,6 +342,7 @@ export async function getOverdueCount(pipe?: PipelineId): Promise<number> {
 /** Short pipeline names, as the Manager dashboard writes them. */
 const PIPELINE_SHORT_LABEL: Record<string, string> = {
   resi: "Residential",
+  newleads: "New Leads",
   comm: "Commercial",
   bizdev: "Biz Dev",
   partner: "Partner",
@@ -308,7 +359,7 @@ function neglectValue(metrics: DealMetric[]): string {
   const bid = metrics.find(
     (m) => m.label === "EST. VALUE" || m.label === "BID",
   );
-  if (bid) return bid.value;
+  if (bid) return compactMoney(bid.value);
   const attributed = metrics.find((m) => m.label === "ATTRIBUTED");
   if (attributed) return `${attributed.value} attr.`;
   const historic = metrics.find(
@@ -380,4 +431,393 @@ export async function getPipelineValueThousands(
     );
     return acc + (m ? metricThousands(m.value) : 0);
   }, 0);
+}
+
+
+/* -------------------------------------------------------------------------
+   Creating leads
+   ------------------------------------------------------------------------- */
+
+export interface CreateDealInput {
+  /** Optional — generated when omitted, so callers need not invent ids. */
+  id?: string;
+  pipelineId: PipelineId;
+  stageId: string;
+  track?: string | null;
+  name: string;
+  accountLine: string;
+  /** Omit and an account is created from `accountLine`. */
+  accountId?: string;
+  tags?: string[];
+  source: string;
+  ownerUserId?: string;
+  ownerAgentId?: string;
+  assignedBy: string;
+  metrics?: DealMetric[];
+  /** The job whose crew this neighbour walked past. */
+  sourcedFromDealId?: string;
+  actorUserId?: string;
+  agentId?: string;
+}
+
+/**
+ * Creates a lead. The neighbour campaign is the first thing that needs this —
+ * every other pipeline starts from a record that already exists.
+ *
+ * The new deal gets an account and a SOURCE touchpoint, so it opens on the
+ * Record screen looking like every other lead rather than a bare row, and its
+ * arrival is on the timeline from the first moment.
+ */
+export async function createDeal(input: CreateDealInput): Promise<Deal> {
+  if (!input.actorUserId && !input.agentId) {
+    throw new Error("createDeal: named no actor — every lead has an author.");
+  }
+
+  const stageRows = await db
+    .select({ id: stages.id, pipelineId: stages.pipelineId })
+    .from(stages);
+  const id = input.id ?? `nl-${crypto.randomUUID().slice(0, 8)}`;
+  assertStageInPipeline(id, input.pipelineId, input.stageId, stageRows);
+
+  const now = new Date();
+  const tags = input.tags ?? [];
+
+  let accountId = input.accountId ?? null;
+  if (!accountId) {
+    accountId = `acct-${id}`;
+    await db
+      .insert(accounts)
+      .values({
+        id: accountId,
+        name: input.accountLine,
+        line: input.accountLine,
+        tags,
+        details: [],
+      })
+      .onConflictDoNothing();
+  }
+
+  const ownerIsAgent = !input.ownerUserId && !!input.ownerAgentId;
+  const [owner] = input.ownerUserId
+    ? await db
+        .select({ name: users.name, initials: users.initials })
+        .from(users)
+        .where(eq(users.id, input.ownerUserId))
+        .limit(1)
+    : [];
+  const agentName = input.ownerAgentId
+    ? (AGENT_NAMES[input.ownerAgentId] ?? "WOW Leads automation")
+    : null;
+
+  const [row] = await db
+    .insert(deals)
+    .values({
+      id,
+      pipelineId: input.pipelineId,
+      stageId: input.stageId,
+      track: input.track ?? null,
+      name: input.name,
+      accountLine: input.accountLine,
+      accountId,
+      tags,
+      source: input.source,
+      ownerUserId: input.ownerUserId ?? null,
+      ownerAgentId: input.ownerAgentId ?? null,
+      ownerInitials: ownerIsAgent ? "AI" : (owner?.initials ?? "??"),
+      ownerName: ownerIsAgent ? (agentName ?? "") : (owner?.name ?? "Unassigned"),
+      ownerIsAgent,
+      assignedBy: input.assignedBy,
+      // Never contacted: neglect measures from createdAt until someone speaks
+      // to them, which is exactly right for a lead that has just appeared.
+      stale: "not yet contacted",
+      lastTouchAt: null,
+      metrics: input.metrics ?? [],
+      sourcedFromDealId: input.sourcedFromDealId ?? null,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning();
+
+  await db.insert(touchpoints).values({
+    id: `tp-${crypto.randomUUID()}`,
+    dealId: id,
+    accountId,
+    channel: "SOURCE",
+    body: `Record created — source ${input.source}`,
+    who: input.assignedBy,
+    byAgent: false,
+    initials: "OS",
+    userId: input.actorUserId ?? null,
+    agentId: input.agentId ?? null,
+    structured: null,
+    occurredAt: now,
+  });
+
+  await appendAudit({
+    entity: "deal",
+    entityId: id,
+    action: "create",
+    userId: input.actorUserId ?? null,
+    agentId: input.actorUserId ? null : (input.agentId ?? null),
+    before: null,
+    after: {
+      pipelineId: input.pipelineId,
+      stageId: input.stageId,
+      name: input.name,
+      source: input.source,
+      sourcedFromDealId: input.sourcedFromDealId ?? null,
+    },
+  });
+
+  return toDeal(row);
+}
+
+/* -------------------------------------------------------------------------
+   Job-site attribution
+   ------------------------------------------------------------------------- */
+
+/** Thousands of dollars of EST. VALUE / BID across a set of deals. */
+function valueThousands(rows: { metrics: DealMetric[] }[]): number {
+  return rows.reduce((acc, r) => {
+    const m = r.metrics.find(
+      (x) => x.label === "EST. VALUE" || x.label === "BID",
+    );
+    return acc + (m ? metricThousands(m.value) : 0);
+  }, 0);
+}
+
+/** The neighbours a job produced — every lead attributed back to one deal. */
+export async function getLeadsSourcedFrom(
+  dealId: string,
+): Promise<SourcedLead[]> {
+  const rows = await db
+    .select({
+      id: deals.id,
+      name: deals.name,
+      account: deals.accountLine,
+      stageLabel: stages.label,
+      stageOrder: stages.sortOrder,
+      metrics: deals.metrics,
+      track: deals.track,
+    })
+    .from(deals)
+    .innerJoin(stages, eq(deals.stageId, stages.id))
+    .where(eq(deals.sourcedFromDealId, dealId))
+    .orderBy(asc(stages.sortOrder), asc(deals.id));
+
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    account: r.account,
+    stage: r.stageLabel,
+    value: neglectValue(r.metrics),
+    track: r.track,
+  }));
+}
+
+/**
+ * What one job produced, on its own. Computed from the leads' metrics rather
+ * than by re-parsing the formatted strings `getLeadsSourcedFrom` returns for
+ * display — a number that has been through a formatter and back is a number
+ * waiting to drift.
+ */
+export async function getSourcedLeadSummary(
+  dealId: string,
+): Promise<SourcedLeadSummary> {
+  const rows = await db
+    .select({ metrics: deals.metrics })
+    .from(deals)
+    .where(eq(deals.sourcedFromDealId, dealId));
+  return {
+    leads: rows.length,
+    value: formatThousands(valueThousands(rows)),
+  };
+}
+
+/**
+ * The canvassing business case: how much net-new demand active job sites
+ * produce. "This $8,400 job generated three neighbour leads worth $14K" is the
+ * number that decides whether crews keep knocking on the two doors either
+ * side, so it has to come from rows rather than a slide.
+ */
+export async function getJobSiteAttribution(): Promise<JobSiteAttribution> {
+  const rows = await db
+    .select({
+      sourcedFromDealId: deals.sourcedFromDealId,
+      metrics: deals.metrics,
+    })
+    .from(deals)
+    .where(isNotNull(deals.sourcedFromDealId));
+
+  if (!rows.length) {
+    return { jobs: 0, leads: 0, value: formatThousands(0), topJob: null };
+  }
+
+  const byJob = new Map<string, { metrics: DealMetric[] }[]>();
+  for (const r of rows) {
+    const jobId = r.sourcedFromDealId;
+    if (!jobId) continue;
+    const bucket = byJob.get(jobId) ?? [];
+    bucket.push({ metrics: r.metrics });
+    byJob.set(jobId, bucket);
+  }
+
+  // Most leads wins; ties break on attributed value, so the "top job" is the
+  // one actually worth pointing at.
+  let top: { id: string; leads: number; valueK: number } | null = null;
+  for (const [jobId, leads] of byJob) {
+    const valueK = valueThousands(leads);
+    if (
+      !top ||
+      leads.length > top.leads ||
+      (leads.length === top.leads && valueK > top.valueK)
+    ) {
+      top = { id: jobId, leads: leads.length, valueK };
+    }
+  }
+
+  let topJob: JobSiteAttribution["topJob"] = null;
+  if (top) {
+    const [job] = await db
+      .select({ name: deals.name, account: deals.accountLine })
+      .from(deals)
+      .where(eq(deals.id, top.id))
+      .limit(1);
+    topJob = {
+      id: top.id,
+      account: job?.account ?? "",
+      name: job?.name ?? top.id,
+      leads: top.leads,
+      value: formatThousands(top.valueK),
+    };
+  }
+
+  return {
+    jobs: byJob.size,
+    leads: rows.length,
+    value: formatThousands(valueThousands(rows)),
+    topJob,
+  };
+}
+
+/* -------------------------------------------------------------------------
+   Canvass targets
+   ------------------------------------------------------------------------- */
+
+export interface CanvassTarget {
+  id: string;
+  sourceDealId: string;
+  address: string;
+  status: string;
+  dealId: string | null;
+  notes: string;
+}
+
+/**
+ * The addresses around a job that nobody has approached yet.
+ *
+ * The neighbour trigger iterates these rather than deriving street numbers —
+ * a drafted message goes to a real front door, so the address list has to come
+ * from a canvassing app, parcel data, or a rep typing what they saw, never
+ * from arithmetic on a house number.
+ */
+export async function getCanvassTargets(
+  sourceDealId: string,
+  status = "pending",
+): Promise<CanvassTarget[]> {
+  const rows = await db
+    .select()
+    .from(canvassTargets)
+    .where(
+      and(
+        eq(canvassTargets.sourceDealId, sourceDealId),
+        eq(canvassTargets.status, status),
+      ),
+    )
+    .orderBy(asc(canvassTargets.address));
+  return rows.map((r) => ({
+    id: r.id,
+    sourceDealId: r.sourceDealId,
+    address: r.address,
+    status: r.status,
+    dealId: r.dealId,
+    notes: r.notes,
+  }));
+}
+
+/** Every job with at least one unworked neighbour address. */
+export async function getJobsWithPendingCanvass(): Promise<string[]> {
+  const rows = await db
+    .selectDistinct({ sourceDealId: canvassTargets.sourceDealId })
+    .from(canvassTargets)
+    .where(eq(canvassTargets.status, "pending"));
+  return rows.map((r) => r.sourceDealId);
+}
+
+/**
+ * Records what happened to one address. Statuses are terminal enough that a
+ * trigger can re-run all day without drafting the same house twice.
+ */
+export type MarkCanvassTargetInput = {
+  status: "pending" | "drafted" | "created" | "skipped";
+  dealId?: string | null;
+  actorUserId?: string;
+  agentId?: string;
+} & (
+  | { targetId: string; sourceDealId?: never; address?: never }
+  /** Identify by where it is — a caller iterating addresses has no target id. */
+  | { targetId?: never; sourceDealId: string; address: string }
+);
+
+export async function markCanvassTarget(
+  input: MarkCanvassTargetInput,
+): Promise<void> {
+  const locate =
+    input.targetId !== undefined
+      ? eq(canvassTargets.id, input.targetId)
+      : and(
+          eq(canvassTargets.sourceDealId, input.sourceDealId),
+          eq(canvassTargets.address, input.address),
+        );
+  const described =
+    input.targetId ?? `${input.sourceDealId} / ${input.address}`;
+
+  const [before] = await db
+    .select()
+    .from(canvassTargets)
+    .where(locate)
+    .limit(1);
+  if (!before) throw new Error(`Canvass target not found: ${described}.`);
+
+  await db
+    .update(canvassTargets)
+    .set({
+      status: input.status,
+      dealId: input.dealId ?? before.dealId,
+      updatedAt: new Date(),
+    })
+    .where(eq(canvassTargets.id, before.id));
+
+  await appendAudit({
+    entity: "canvass_target",
+    entityId: before.id,
+    action: `canvass.${input.status}`,
+    userId: input.actorUserId ?? null,
+    agentId: input.actorUserId ? null : (input.agentId ?? null),
+    before: { status: before.status, dealId: before.dealId },
+    after: { status: input.status, dealId: input.dealId ?? before.dealId },
+  });
+}
+
+
+/**
+ * Deal count per pipeline, for the rail badges. One grouped query rather than
+ * pulling every deal into memory to count five numbers.
+ */
+export async function getPipelineCounts(): Promise<Record<string, number>> {
+  const rows = await db
+    .select({ pipelineId: deals.pipelineId, n: count() })
+    .from(deals)
+    .groupBy(deals.pipelineId);
+  return Object.fromEntries(rows.map((r) => [r.pipelineId, r.n]));
 }

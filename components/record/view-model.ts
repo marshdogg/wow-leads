@@ -58,6 +58,17 @@ export interface MetaRow {
   label: string;
   value: string;
   color: string;
+  /** Set when the value navigates somewhere — currently the originating job. */
+  href?: string;
+  /** Set only for rows the e2e suite addresses directly. */
+  testId?: string;
+}
+
+/** The job a lead came off, when it came off one. */
+export interface OriginJob {
+  id: string;
+  /** Address line of the job, e.g. "2308 Tunlaw Rd NW". */
+  account: string;
 }
 
 /**
@@ -66,20 +77,38 @@ export interface MetaRow {
  * self-sourced, and the colour is the only place that provenance shows in the
  * panel.
  */
-export function metaRows(view: RecordView): MetaRow[] {
+export function metaRows(view: RecordView, origin?: OriginJob | null): MetaRow[] {
   const { deal } = view;
   const primary =
     view.contacts.find((c) => c.primary) ?? view.contacts[0] ?? null;
   const tags = accountTags(view);
 
-  const values: Record<MetaFieldKey, { value: string; color: string }> = {
+  const values: Record<
+    MetaFieldKey,
+    { value: string; color: string; href?: string; testId?: string } | null
+  > = {
     source: { value: deal.source, color: "#e2e7e2" },
     assignedBy: {
       value: deal.assignedBy,
       color: deal.assignedBy.includes("→") ? "#b6f07a" : "#e2e7e2",
     },
+    // Green, like a trigger or partner assignment: a lead that came off a job
+    // we were already on is the provenance worth noticing. Omitted entirely
+    // when there is no originating job, rather than shown as "—".
+    sourcedFrom: origin
+      ? {
+          value: `${RECORD_FIELDS.sourcedFromValuePrefix} ${origin.account}`,
+          color: "#b6f07a",
+          href: `/record/${origin.id}`,
+          testId: "sourced-from",
+        }
+      : null,
     owner: { value: deal.owner.name, color: "#e2e7e2" },
-    pipeline: { value: PIPES[deal.pipe].label, color: "#e2e7e2" },
+    // `title`, not `label`. Labels are now category-scoped for the rail, where
+    // "Re-marketing" sits under a RESIDENTIAL LEADS heading. This strip has no
+    // such heading, so it needs the standalone name: "Residential
+    // Re-marketing", which is also what the prototype showed.
+    pipeline: { value: PIPES[deal.pipe].title, color: "#e2e7e2" },
     businessType: { value: tags[0] ?? "—", color: "#e2e7e2" },
     preferredContact: {
       value: primary ? CHANNEL_LABELS[primary.prefers] : "—",
@@ -87,12 +116,13 @@ export function metaRows(view: RecordView): MetaRow[] {
     },
   };
 
-  return META_FIELDS.map((f) => ({
-    key: f.key,
-    label: f.label,
-    value: values[f.key].value,
-    color: values[f.key].color,
-  }));
+  const rows: MetaRow[] = [];
+  for (const f of META_FIELDS) {
+    const v = values[f.key];
+    if (!v) continue;
+    rows.push({ key: f.key, label: f.label, ...v });
+  }
+  return rows;
 }
 
 /* -------------------------------------------------------------------------

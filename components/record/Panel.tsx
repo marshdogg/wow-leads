@@ -5,13 +5,17 @@ export function Panel({
   children,
   border = "#23271f",
   style,
+  testId,
 }: {
   children: ReactNode;
   border?: string;
   style?: CSSProperties;
+  /** Set only for panels the e2e suite addresses directly. */
+  testId?: string;
 }) {
   return (
     <div
+      data-testid={testId}
       style={{
         background: "#111411",
         border: `1px solid ${border}`,

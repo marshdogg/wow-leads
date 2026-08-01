@@ -6,7 +6,7 @@ import {
   isNeglected,
   neglectRuleCopy,
 } from "@/components/manager/neglect";
-import { PIPES } from "@/lib/pipelines";
+import { PIPELINE_IDS, PIPES } from "@/lib/pipelines";
 
 const NOW = new Date("2026-07-31T12:00:00Z");
 const DAY_MS = 86_400_000;
@@ -168,8 +168,22 @@ describe("neglectRuleCopy", () => {
   });
 
   it("reads as one sentence", () => {
+    // Deliberately exact. Adding a pipeline changes this sentence, and a
+    // manager-facing rule statement should not change without someone
+    // re-reading it — this assertion is the thing that forces that.
     expect(neglectRuleCopy()).toBe(
-      "No logged activity in 14+ days (45+ on Commercial Bid) and no next action booked.",
+      "No logged activity in 14+ days (45+ on Commercial Bid, 1+ on New Leads) and no next action booked.",
     );
+  });
+
+  it("stays a sentence rather than becoming a list as pipelines are added", () => {
+    const copy = neglectRuleCopy();
+    expect(copy.match(/\./g)).toHaveLength(1);
+    // Every non-default threshold is named with the pipeline it applies to.
+    for (const id of PIPELINE_IDS) {
+      const p = PIPES[id];
+      if (p.neglectDays === PIPES.resi.neglectDays) continue;
+      expect(copy).toContain(`${p.neglectDays}+ on ${p.label}`);
+    }
   });
 });

@@ -36,6 +36,9 @@ export type RecordFieldKey =
   /* activity */
   | "activityHeading"
   | "activityCountSuffix"
+  /* job-site attribution */
+  | "sourcedFromValuePrefix"
+  | "leadsFromJobHeading"
   /* meta */
   | "recordHeading"
   /* next step */
@@ -67,6 +70,10 @@ export const RECORD_FIELDS: Record<RecordFieldKey, string> = {
   activityHeading: "ACTIVITY · WITH PROVENANCE",
   activityCountSuffix: "travels to the estimate",
 
+  // Reads "Sourced from · Job at 2308 Tunlaw Rd NW" in the RECORD strip.
+  sourcedFromValuePrefix: "Job at",
+  leadsFromJobHeading: "LEADS FROM THIS JOB",
+
   recordHeading: "RECORD",
 
   nextStepHeading: "NEXT STEP",
@@ -96,6 +103,8 @@ export const RECORD_FIELD_KEYS: readonly RecordFieldKey[] = [
   "accessHeading",
   "activityHeading",
   "activityCountSuffix",
+  "sourcedFromValuePrefix",
+  "leadsFromJobHeading",
   "recordHeading",
   "nextStepHeading",
   "nextStateOk",
@@ -162,15 +171,23 @@ function normalizeLabel(s: string): string {
 export type MetaFieldKey =
   | "source"
   | "assignedBy"
+  | "sourcedFrom"
   | "owner"
   | "pipeline"
   | "businessType"
   | "preferredContact";
 
-/** Render order and labels for the RECORD panel. */
+/**
+ * Render order and labels for the RECORD panel.
+ *
+ * `sourcedFrom` sits next to `assignedBy` because it answers the same
+ * question — where did this come from — and only renders when the lead
+ * actually came off a job.
+ */
 export const META_FIELDS: readonly FieldSpec<MetaFieldKey>[] = [
   { key: "source", label: "Lead source" },
   { key: "assignedBy", label: "Assigned by" },
+  { key: "sourcedFrom", label: "Sourced from" },
   { key: "owner", label: "Owner" },
   { key: "pipeline", label: "Pipeline" },
   { key: "businessType", label: "Business type" },

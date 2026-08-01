@@ -139,6 +139,61 @@ export function splitAreas(source: string | undefined): string[] {
     );
 }
 
+/**
+ * The kind of work a completion record describes.
+ *
+ *   "Exterior repaint completed — siding, trim and front door · $9,250"
+ *                                → "exterior"
+ *
+ * This beats the deal's tags, and the difference is not cosmetic: r8 is
+ * tagged INTERIOR but its JOB row records an exterior repaint, so trusting
+ * the tag put "we just finished the interior at 2308 Tunlaw" into a message
+ * bound for the neighbours of a house whose outside we painted.
+ */
+export function jobWorkType(job: TouchpointRow | undefined): string | null {
+  if (!job) return null;
+  const match = /\b(interior|exterior|industrial)\b/i.exec(job.body);
+  return match ? match[1].toLowerCase() : null;
+}
+
+/* -------------------------------------------------------------------------
+   Proximity
+   ------------------------------------------------------------------------- */
+
+/**
+ * How each phrase joins to "you". "next door from you" is not English, and a
+ * canvassing message that misuses a preposition about the reader's own street
+ * reads as machine-written — the one impression this outreach cannot afford.
+ */
+const PROXIMITY_CONNECTORS: Record<string, string> = {
+  "next door": "to you",
+  "two doors down": "from you",
+  "three doors down": "from you",
+  "four doors down": "from you",
+  "across the street": "from you",
+  opposite: "you",
+  "on the corner": "",
+};
+
+/**
+ * A canvasser's note sometimes records how close the house is. Only a
+ * recognised phrase is lifted — the rest of the note is free text about the
+ * conversation and has no place in a drafted message.
+ */
+export function proximityFrom(notes: string): string | null {
+  const match = new RegExp(
+    `\\b(${Object.keys(PROXIMITY_CONNECTORS).join("|")})\\b`,
+    "i",
+  ).exec(notes);
+  return match ? match[1].toLowerCase() : null;
+}
+
+/** "next door" → "next door to you"; "on the corner" → "on the corner". */
+export function proximityClause(proximity: string): string {
+  const connector = PROXIMITY_CONNECTORS[proximity.toLowerCase()] ?? "from you";
+  return connector ? `${proximity} ${connector}` : proximity;
+}
+
 /* -------------------------------------------------------------------------
    People and accounts
    ------------------------------------------------------------------------- */

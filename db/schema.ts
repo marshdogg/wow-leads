@@ -8,6 +8,7 @@ import {
   text,
   timestamp,
   uniqueIndex,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 
 /**
@@ -56,12 +57,23 @@ export const users = pgTable("users", {
 export const pipelines = pgTable("pipelines", {
   id: text("id").primaryKey(),
   label: text("label").notNull(),
+  /** Rail grouping and the board eyebrow: RESIDENTIAL LEADS | COMMERCIAL. */
+  category: text("category").notNull().default("COMMERCIAL"),
   meta: text("meta").notNull(),
   dot: text("dot").notNull(),
   title: text("title").notNull(),
   sub: text("sub").notNull(),
   filterLabel: text("filter_label").notNull(),
   hasTracks: boolean("has_tracks").notNull().default(false),
+  /**
+   * The track segmented-control options for this pipeline. Stored rather than
+   * read from the TS config so track sets stay reconfigurable without a
+   * deploy, the same property stages have.
+   */
+  trackOptions: jsonb("track_options")
+    .$type<{ id: string; label: string }[]>()
+    .notNull()
+    .default([]),
   showStageValue: boolean("show_stage_value").notNull().default(false),
   /** Days without a touchpoint before a deal is neglected. */
   neglectDays: integer("neglect_days").notNull().default(14),
@@ -267,6 +279,15 @@ export const deals = pgTable(
 
     promoId: text("promo_id").references(() => promos.id),
 
+    /**
+     * The job that produced this lead — a neighbour who saw the crew working.
+     * Self-referencing, so "this $8,400 job generated three leads worth $14K"
+     * is a query rather than a guess.
+     */
+    sourcedFromDealId: text("sourced_from_deal_id").references(
+      (): AnyPgColumn => deals.id,
+    ),
+
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -279,6 +300,52 @@ export const deals = pgTable(
     index("deals_stage_idx").on(t.stageId),
     index("deals_account_idx").on(t.accountId),
     index("deals_last_touch_idx").on(t.lastTouchAt),
+    index("deals_sourced_from_idx").on(t.sourcedFromDealId),
+  ],
+);
+
+/* -------------------------------------------------------------------------
+   Canvass targets
+   ------------------------------------------------------------------------- */
+
+/**
+ * The houses either side of a job we are working.
+ *
+ * A neighbour campaign drafts a real message to a real front door, so the
+ * addresses have to come from somewhere accountable — a canvassing app, parcel
+ * data, or a rep typing what they saw on the street. Deriving them by
+ * incrementing street numbers would invent addresses, and the drafts go to
+ * people who live at them.
+ *
+ * Rows carry their own status so a trigger can run repeatedly without
+ * re-drafting the same house: `pending` is unworked, `created` points at the
+ * lead it became, `skipped` is a decision someone made.
+ */
+export const canvassTargets = pgTable(
+  "canvass_targets",
+  {
+    id: text("id").primaryKey(),
+    /** The job whose crew the neighbours can see. */
+    sourceDealId: text("source_deal_id")
+      .notNull()
+      .references((): AnyPgColumn => deals.id, { onDelete: "cascade" }),
+    address: text("address").notNull(),
+    /** pending | drafted | created | skipped */
+    status: text("status").notNull().default("pending"),
+    /** Set once this address has become a lead. */
+    dealId: text("deal_id").references((): AnyPgColumn => deals.id),
+    notes: text("notes").notNull().default(""),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("canvass_targets_source_idx").on(t.sourceDealId),
+    index("canvass_targets_status_idx").on(t.status),
+    uniqueIndex("canvass_targets_address_idx").on(t.sourceDealId, t.address),
   ],
 );
 
@@ -422,6 +489,19 @@ export const dealsRelations = relations(deals, ({ one, many }) => ({
   }),
   touchpoints: many(touchpoints),
   approvals: many(approvals),
+}));
+
+export const canvassTargetsRelations = relations(canvassTargets, ({ one }) => ({
+  sourceDeal: one(deals, {
+    fields: [canvassTargets.sourceDealId],
+    references: [deals.id],
+    relationName: "canvassSource",
+  }),
+  deal: one(deals, {
+    fields: [canvassTargets.dealId],
+    references: [deals.id],
+    relationName: "canvassLead",
+  }),
 }));
 
 export const touchpointsRelations = relations(touchpoints, ({ one }) => ({

@@ -7,10 +7,15 @@ import {
   staleDays,
 } from "@/lib/fixtures/time";
 import { PIPELINE_IDS, PIPES } from "@/lib/pipelines";
+import type { PipelineId } from "@/lib/types";
 import {
   AGENT_NAMES,
   daysSince,
   formatDue,
+  formatThousands,
+  metricDollars,
+  metricNumber,
+  metricThousands,
   isContactChannel,
   isCustomerContactChannel,
   isNeglected,
@@ -73,6 +78,148 @@ describe("neglect threshold", () => {
   it("counts whole elapsed days", () => {
     expect(daysSince(ago(21), NOW)).toBe(21);
     expect(daysSince(ago(0.5), NOW)).toBe(0);
+  });
+});
+
+describe("New Leads: a pipeline measured in minutes", () => {
+  const newLeads = DEAL_FIXTURES.filter((d) => d.pipe === "newleads");
+
+  it("seeds the five leads Marshall's board shows, one per live stage", () => {
+    expect(newLeads).toHaveLength(5);
+    // Nurture is deliberately empty: the screenshot has two leads in New and
+    // one each through the ladder. An empty column is a real state here.
+    expect(newLeads.map((d) => d.stage).sort()).toEqual([
+      "booked",
+      "contacted",
+      "new",
+      "new",
+      "qualified",
+    ]);
+  });
+
+  it("carries no track chip, because the source is a card metric here", () => {
+    // Residential uses chips to say *why* we're re-approaching someone. New
+    // Leads says *how they arrived*, and does it in the metric strip — so a
+    // track chip here would be a second, competing answer to the same question.
+    for (const d of newLeads) expect(d.track ?? null).toBeNull();
+  });
+
+  it("reads sub-day staleness, because a day is the whole SLA here", () => {
+    expect(staleDays("new 12 min ago")).toBeCloseTo(12 / 1440, 6);
+    expect(staleDays("28 hr silent")).toBeCloseTo(28 / 24, 6);
+    expect(staleDays("touched 6 hr ago")).toBeCloseTo(0.25, 6);
+  });
+
+  it("breaches the 1-day SLA on the overnight lead and only that one", () => {
+    const breached = newLeads.filter((d) =>
+      isNeglected(
+        lastTouchFrom(d.stale, NOW),
+        PIPES.newleads.neglectDays,
+        NOW,
+        d.next?.state ?? null,
+      ),
+    );
+    // n1 is 12 minutes old, n2 sat unworked overnight past the SLA.
+    expect(breached.map((d) => d.id)).toEqual(["n2"]);
+  });
+
+  it("keeps the minutes-old lead off the list even at a 1-day threshold", () => {
+    const n1 = newLeads.find((d) => d.id === "n1")!;
+    expect(daysSince(lastTouchFrom(n1.stale, NOW)!, NOW)).toBe(0);
+    expect(isNeglected(lastTouchFrom(n1.stale, NOW), 1, NOW, "ok")).toBe(false);
+  });
+
+  it("reads hour-grained due strings in both directions", () => {
+    const overdue = nextDueFrom("Was due 4 hours ago", NOW)!;
+    expect(overdue.getTime()).toBe(NOW.getTime() - 4 * 3_600_000);
+    const soon = nextDueFrom("Due in 8 min", NOW)!;
+    expect(soon.getTime()).toBe(NOW.getTime() + 8 * 60_000);
+  });
+
+  it("attributes the neighbour lead to the job that produced it", () => {
+    const sourced = DEAL_FIXTURES.filter((d) => d.sourcedFromDealId === "r8");
+    expect(sourced.map((d) => d.id)).toEqual(["n2"]);
+    // The card states the relationship in its own metric strip. The value is
+    // left blank in the fixture on purpose — the seed fills it from the linked
+    // job so the card and the link can never disagree — so this asserts the
+    // slot exists, not what the seed puts in it.
+    expect(
+      sourced[0].metrics?.some((m) => m.label === "NEIGHBOUR OF"),
+    ).toBe(true);
+  });
+});
+
+describe("neighbour campaign inputs", () => {
+  it("keeps the warned lead past target but short of escalation", () => {
+    // n1 is 14 minutes old against a 5-minute target — deliberately late but
+    // not yet escalated, which is the state the board is drawn in. Moving it
+    // inside 5 minutes would delete the only example of that state.
+    const n1 = DEAL_FIXTURES.find((d) => d.id === "n1")!;
+    const minutes = (staleDays(n1.stale) ?? 0) * 1440;
+    expect(minutes).toBeGreaterThan(5);
+    expect(minutes).toBeLessThan(60);
+    expect(n1.next?.state).toBe("ok");
+  });
+
+  it("leaves the breaching lead with no contact to point at", () => {
+    // The predicate must see silence, not a friendly call. n2 is seeded with a
+    // SOURCE row only — asserted here so nobody gives it a timeline later.
+    const n2 = DEAL_FIXTURES.find((d) => d.id === "n2")!;
+    expect((staleDays(n2.stale) ?? 0) * 24).toBeGreaterThan(24);
+    expect(n2.next?.state).toBe("overdue");
+  });
+
+  it("keeps r8's card describing the booked estimate, not the finished job", () => {
+    // The completion lives on a JOB touchpoint; the card describes the *next*
+    // job Lorna booked off the back of it. Both are true of a repeat customer,
+    // and neither should be rewritten to accommodate the other.
+    const r8 = DEAL_FIXTURES.find((d) => d.id === "r8")!;
+    expect(r8.track).toBe("repeat");
+    expect(r8.stale).toBe("booked yesterday");
+    expect(r8.next?.due).toBe("Thu 10:00 AM · Kris Jolin");
+    expect(r8.osRef).toBe("EST-40218");
+  });
+
+  it("points every sourced lead at a job that actually exists", () => {
+    // The source *field* can say anything — a neighbour lead often carries the
+    // sign or ad that caught them. The link is what the attribution query
+    // reads, so it is the link that has to resolve.
+    const ids = new Set(DEAL_FIXTURES.map((d) => d.id));
+    const sourced = DEAL_FIXTURES.filter((d) => d.sourcedFromDealId);
+    expect(sourced.length).toBeGreaterThan(0);
+    for (const d of sourced) expect(ids.has(d.sourcedFromDealId!)).toBe(true);
+  });
+});
+
+describe("money metrics carry their own unit", () => {
+  it("reads a commercial bid written in K", () => {
+    expect(metricThousands("$180K")).toBe(180);
+    expect(metricDollars("$180K")).toBe(180_000);
+  });
+
+  it("reads a residential job written in full dollars", () => {
+    // Treating "$5,200" as 5200 thousands is how $14K became $14.00M.
+    expect(metricThousands("$5,200")).toBeCloseTo(5.2, 6);
+    expect(metricDollars("$5,200")).toBe(5_200);
+  });
+
+  it("reads millions", () => {
+    expect(metricThousands("$1.05M")).toBeCloseTo(1050, 6);
+  });
+
+  it("keeps counts as counts", () => {
+    expect(metricNumber("14")).toBe(14);
+    expect(metricNumber("High")).toBe(0);
+  });
+
+  it("formats the way the dashboards write money", () => {
+    expect(formatThousands(14)).toBe("$14K");
+    expect(formatThousands(192.4)).toBe("$192K");
+    expect(formatThousands(1050)).toBe("$1.05M");
+  });
+
+  it("writes nothing as $0, never $0K", () => {
+    expect(formatThousands(0)).toBe("$0");
   });
 });
 
@@ -199,14 +346,19 @@ describe("stale strings map to real timestamps", () => {
     for (const d of DEAL_FIXTURES) {
       const days = staleDays(d.stale);
       const at = lastTouchFrom(d.stale, NOW);
-      if (days === null) expect(at).toBeNull();
-      else expect(daysSince(at!, NOW)).toBe(days);
+      if (days === null) {
+        expect(at).toBeNull();
+      } else {
+        // New Leads staleness is sub-day, so compare on the same floor the
+        // neglect query uses rather than demanding whole-day equality.
+        expect(daysSince(at!, NOW)).toBe(Math.floor(days));
+      }
     }
   });
 
-  it("puts the four staleWarn deals past their pipeline's threshold", () => {
+  it("puts the staleWarn deals past their pipeline's threshold", () => {
     const warned = DEAL_FIXTURES.filter((d) => d.staleWarn);
-    expect(warned.map((d) => d.id)).toEqual(["r4", "c3", "b4", "p5"]);
+    expect(warned.map((d) => d.id)).toEqual(["r4", "c3", "b4", "p5", "n2"]);
     for (const d of warned) {
       // c3 is 16 days silent — flagged on the card, but Commercial's 45-day
       // cycle means it is not yet *neglected*. The two signals are different.
@@ -229,10 +381,11 @@ describe("stale strings map to real timestamps", () => {
     expect(anchorDays("not yet contacted")).toBeNull();
   });
 
-  it("neglects exactly b4, r4 and p5 across the whole fixture set", () => {
+  it("neglects exactly b4, r4, p5 and n2 across the whole fixture set", () => {
     // Every other deal is either inside its threshold or has someone booked to
     // call it. The prototype hard-codes c3 into this list; Commercial's 45-day
-    // cycle takes it out, and nothing else qualifies.
+    // cycle takes it out. n2 is the New Leads SLA breach — one day, not
+    // fourteen, which is the point of a per-pipeline threshold.
     const neglected = DEAL_FIXTURES.filter((d) =>
       isNeglected(
         lastTouchFrom(d.stale, NOW),
@@ -241,7 +394,7 @@ describe("stale strings map to real timestamps", () => {
         d.next?.state ?? null,
       ),
     ).map((d) => d.id);
-    expect(neglected.sort()).toEqual(["b4", "p5", "r4"]);
+    expect(neglected.sort()).toEqual(["b4", "n2", "p5", "r4"]);
   });
 
   it("keeps a never-contacted lead off the list while its intro call stands", () => {
@@ -338,9 +491,10 @@ describe("formatDue", () => {
 });
 
 describe("fixture integrity", () => {
-  it("holds all 25 prototype leads", () => {
-    expect(DEAL_FIXTURES).toHaveLength(25);
-    expect(new Set(DEAL_FIXTURES.map((d) => d.id)).size).toBe(25);
+  it("holds the 25 prototype leads plus the 5 New Leads fixtures", () => {
+    expect(DEAL_FIXTURES).toHaveLength(30);
+    expect(new Set(DEAL_FIXTURES.map((d) => d.id)).size).toBe(30);
+    expect(DEAL_FIXTURES.filter((d) => d.pipe !== "newleads")).toHaveLength(25);
   });
 
   it("places every lead on a stage of its own pipeline", () => {
@@ -349,10 +503,30 @@ describe("fixture integrity", () => {
     }
   });
 
-  it("gives tracks only to Residential", () => {
+  // Residential is the only pipeline that uses track chips. New Leads answers
+  // "how did they arrive?" in the metric strip instead — a chip there would be
+  // a second, competing answer to the same question — so its deals carry no
+  // track at all, not an unused one.
+  const TRACK_VOCABULARY: Partial<Record<PipelineId, string[]>> = {
+    resi: ["referral", "repeat", "revival"],
+  };
+
+  it("draws each lead's track from its own pipeline's vocabulary", () => {
     for (const d of DEAL_FIXTURES) {
-      if (d.pipe === "resi") expect(d.track).toBeTruthy();
-      else expect(d.track).toBeUndefined();
+      const vocabulary = TRACK_VOCABULARY[d.pipe];
+      if (vocabulary) {
+        expect(d.track).toBeTruthy();
+        expect(vocabulary).toContain(d.track);
+      } else {
+        expect(d.track).toBeUndefined();
+      }
+    }
+  });
+
+  it("keeps every track value inside the one vocabulary that defines it", () => {
+    const resi = new Set(TRACK_VOCABULARY.resi);
+    for (const d of DEAL_FIXTURES) {
+      if (d.pipe !== "resi") expect(resi.has(d.track ?? "")).toBe(false);
     }
   });
 

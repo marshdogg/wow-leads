@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { DashPanel } from "@/components/manager/DashPanel";
+import { JobSiteAttribution } from "@/components/manager/JobSiteAttribution";
 import { Leaderboard } from "@/components/manager/Leaderboard";
 import { NeglectedPanel } from "@/components/manager/NeglectedPanel";
 import { PipelineHealth } from "@/components/manager/PipelineHealth";
@@ -12,7 +13,10 @@ import {
   getProspectMetrics,
   getSourceRoi,
 } from "@/lib/repositories/analytics";
-import { getNeglectedDeals } from "@/lib/repositories/deals";
+import {
+  getJobSiteAttribution,
+  getNeglectedDeals,
+} from "@/lib/repositories/deals";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +30,7 @@ export default async function ManagerPage() {
     health,
     sourceRoi,
     prospectMetrics,
+    jobSite,
   ] = await Promise.all([
     getNeglectedDeals(),
     getNeglectedValue(),
@@ -33,6 +38,7 @@ export default async function ManagerPage() {
     getPipelineHealth(),
     getSourceRoi(),
     getProspectMetrics(),
+    getJobSiteAttribution(),
   ]);
 
   return (
@@ -73,6 +79,7 @@ export default async function ManagerPage() {
           className="flex min-w-0 flex-col"
           style={{ gap: 18 }}
         >
+          <JobSiteAttribution data={jobSite} />
           <PipelineHealth rows={health} />
           <ProspectMetrics stats={prospectMetrics} />
         </div>

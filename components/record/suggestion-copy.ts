@@ -54,12 +54,13 @@ function nextStepSuggestion(
   if (!next) {
     return `Set a next step — this record has no scheduled touch and will hit the neglected list in ${daysToNeglect(view, neglectDays, now)} days.`;
   }
-  // `due` is a human phrase ("Today 3:00 PM", "Was due 4 days ago"), so it is
-  // read as its own sentence rather than dropped into one.
+  // `due` is a human phrase that may be a fragment ("Was due 4 days ago") or
+  // carry proper nouns ("Thu 10:00 AM · Kris Jolin"), so it is quoted verbatim
+  // after the clause break rather than case-folded into a sentence.
   if (next.state === "overdue") {
-    return `${next.label} is overdue — ${next.due.toLowerCase()}. Clear it or reschedule before the account goes quiet.`;
+    return `${next.label} — ${next.due}. Clear it or reschedule before the account goes quiet.`;
   }
-  return `${next.label} is scheduled — ${next.due.toLowerCase()}. Confirm it lands, or bring it forward while the account is warm.`;
+  return `${next.label} is scheduled for ${next.due}. Confirm it lands, or bring it forward while the account is warm.`;
 }
 
 function daysToNeglect(

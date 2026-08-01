@@ -64,3 +64,33 @@ export function lowerFirst(text: string): string {
 export function unpunctuated(text: string): string {
   return text.replace(/[.\s]+$/, "");
 }
+
+/**
+ * A duration as a person would say it out loud: "8 minutes", "1 hour 30
+ * minutes", "2 days".
+ *
+ * The remainder is kept deliberately. This renders the age of an unworked
+ * lead in an alert whose entire purpose is conveying how long somebody has
+ * been left waiting — flooring 90 minutes to "1 hour" understates the very
+ * thing the reader is being asked to act on. Rounding up would overstate it,
+ * which is no better; say the number.
+ */
+export function humaniseMinutes(minutes: number): string {
+  if (minutes < 1) return "under a minute";
+  if (minutes < 60) return minutes === 1 ? "1 minute" : `${minutes} minutes`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    const rest = minutes % 60;
+    const hourPart = hours === 1 ? "1 hour" : `${hours} hours`;
+    // Below five minutes the remainder is noise, not information.
+    if (rest < 5) return hourPart;
+    return `${hourPart} ${rest} minutes`;
+  }
+
+  const days = Math.floor(hours / 24);
+  const restHours = hours % 24;
+  const dayPart = days === 1 ? "1 day" : `${days} days`;
+  if (restHours < 1) return dayPart;
+  return `${dayPart} ${restHours === 1 ? "1 hour" : `${restHours} hours`}`;
+}
