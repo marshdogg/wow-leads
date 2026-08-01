@@ -46,10 +46,31 @@ export function isPaidSource(source: string): boolean {
   return PAID_SOURCES.some((term) => normalised.includes(term));
 }
 
+/**
+ * How long this lead has been sitting with nobody acting on it.
+ *
+ * Measured from the last thing we *did*, not from arrival: one voicemail four
+ * hours in resets the clock for the next attempt, but it does not mean the
+ * lead is handled. A lead still in `new` is unworked however many times it
+ * has been rung.
+ */
+export function silentMinutes(facts: SpeedToLeadFacts): number | null {
+  const since = facts.lastAttemptAt ?? facts.arrivedAt;
+  return since ? minutesBetween(since, facts.now) : null;
+}
+
+/** Whether the *first* response beat the SLA. A historical fact, not a state. */
+export function firstResponseMinutes(facts: SpeedToLeadFacts): number | null {
+  return facts.arrivedAt && facts.firstContactAt
+    ? minutesBetween(facts.arrivedAt, facts.firstContactAt)
+    : null;
+}
+
 /** Which side of the SLA a lead is on. Pure, and total for any age. */
 export function severityFor(facts: SpeedToLeadFacts): SpeedToLeadSeverity {
-  if (!facts.arrivedAt || facts.firstContactAt) return "on_track";
-  const minutes = minutesBetween(facts.arrivedAt, facts.now);
+  if (facts.stageId !== "new") return "on_track";
+  const minutes = silentMinutes(facts);
+  if (minutes === null) return "on_track";
   if (minutes >= ESCALATE_MINUTES) return "breach";
   if (minutes >= WARN_MINUTES) return "warn";
   return "on_track";
@@ -76,33 +97,38 @@ export function evaluateSpeedToLead(facts: SpeedToLeadFacts): {
     };
   }
 
-  if (firstContactAt) {
-    const responseMinutes = minutesBetween(arrivedAt, firstContactAt);
-    return {
-      eligible: false,
-      reasons: [
-        `Contacted ${humaniseMinutes(responseMinutes)} after arriving — inside the SLA`,
-      ],
-    };
-  }
-
-  const waiting = minutesBetween(arrivedAt, now);
+  const waiting = silentMinutes(facts) ?? 0;
   if (waiting < WARN_MINUTES) {
     return {
       eligible: false,
       reasons: [
-        `Arrived ${humaniseMinutes(waiting)} ago — still inside the ${WARN_MINUTES}-minute window`,
+        firstContactAt
+          ? `Attempted ${humaniseMinutes(waiting)} ago — give it the ${WARN_MINUTES}-minute window before chasing again`
+          : `Arrived ${humaniseMinutes(waiting)} ago — still inside the ${WARN_MINUTES}-minute window`,
       ],
     };
   }
 
   const breaching = waiting >= ESCALATE_MINUTES;
+  const arrivedAgo = humaniseMinutes(minutesBetween(arrivedAt, now));
+  const firstResponse = firstResponseMinutes(facts);
+
   const reasons: string[] = [
-    `Lead arrived ${humaniseMinutes(waiting)} ago and nobody has contacted them`,
+    firstContactAt
+      ? `Arrived ${arrivedAgo} ago, last attempt ${humaniseMinutes(waiting)} ago, still sitting in New`
+      : `Lead arrived ${arrivedAgo} ago and nobody has contacted them`,
     breaching
       ? `Past the ${ESCALATE_MINUTES}-minute escalation threshold, not just the ${WARN_MINUTES}-minute warning`
       : `Speed-to-lead SLA is ${WARN_MINUTES} minutes to first contact`,
   ];
+
+  // Only stated when it happened, and stated accurately — the old wording
+  // called a four-hour first response "inside the SLA".
+  if (firstResponse !== null && firstResponse > WARN_MINUTES) {
+    reasons.push(
+      `First response took ${humaniseMinutes(firstResponse)} against a ${WARN_MINUTES}-minute target`,
+    );
+  }
 
   if (paid) {
     reasons.push(
@@ -112,7 +138,13 @@ export function evaluateSpeedToLead(facts: SpeedToLeadFacts): {
     reasons.push(`Source: ${source} — net-new demand, nobody has worked with us before`);
   }
 
-  reasons.push(`Assigned to ${ownerName}, still in the New column`);
+  // An unassigned breaching lead is a worse problem than an assigned one, so
+  // say so rather than rendering "Assigned to Unassigned".
+  reasons.push(
+    isUnassigned(ownerName)
+      ? "Nobody is assigned to this lead"
+      : `Assigned to ${ownerName}, still in the New column`,
+  );
 
   return { eligible: true, reasons };
 }
@@ -138,13 +170,19 @@ export const speedToLeadTrigger: TriggerDefinition<SpeedToLeadFacts> = {
     `Nothing was sent to ${f.dealName} — this is an internal alert. ${f.ownerName} has an urgent next action on the lead.`,
 };
 
+function isUnassigned(ownerName: string): boolean {
+  return ownerName.trim().length === 0 || /^unassigned$/i.test(ownerName.trim());
+}
+
 /** The alert body written to the timeline. Not a customer-facing message. */
 export function escalationNote(facts: SpeedToLeadFacts): string {
-  const waiting = facts.arrivedAt
-    ? humaniseMinutes(minutesBetween(facts.arrivedAt, facts.now))
-    : "an unknown time";
+  const silent = silentMinutes(facts);
+  const waiting = silent === null ? "an unknown time" : humaniseMinutes(silent);
   const level = severityFor(facts) === "breach" ? "BREACH" : "WARNING";
-  return `Speed-to-lead ${level} — ${facts.dealName} has been unworked for ${waiting}. Source ${facts.source}. Assigned to ${facts.ownerName}.`;
+  const owner = isUnassigned(facts.ownerName)
+    ? "Unassigned."
+    : `Assigned to ${facts.ownerName}.`;
+  return `Speed-to-lead ${level} — ${facts.dealName} has been unworked for ${waiting}. Source ${facts.source}. ${owner}`;
 }
 
 /** What the rep is told to do, and by when. */

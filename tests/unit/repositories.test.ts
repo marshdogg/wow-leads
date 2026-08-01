@@ -170,6 +170,20 @@ describe("neighbour campaign inputs", () => {
     expect(n1.next?.state).toBe("ok");
   });
 
+  it("gives the breaching lead a real arrival-to-contact gap", () => {
+    // Speed-to-lead measures arrival → first contact, so a lead contacted the
+    // same minute it lands has nothing to escalate however stale it later
+    // goes. n2 arrived 30 hours ago and was rung back 26 hours ago: four
+    // hours against a five-minute target. Without that gap the escalation
+    // path — overdue next action, TRIGGER touchpoint, never entering the
+    // Approvals queue — has nothing to demonstrate on.
+    const n2 = DEAL_FIXTURES.find((d) => d.id === "n2")!;
+    const contactedAtHours = (staleDays(n2.stale) ?? 0) * 24;
+    const ARRIVAL_HOURS = 30;
+    expect(contactedAtHours).toBe(26);
+    expect(ARRIVAL_HOURS - contactedAtHours).toBeGreaterThan(1);
+  });
+
   it("leaves the breaching lead with no contact to point at", () => {
     // The predicate must see silence, not a friendly call. n2 is seeded with a
     // SOURCE row only — asserted here so nobody gives it a timeline later.

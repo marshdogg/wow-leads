@@ -606,6 +606,7 @@ export function speedToLeadFacts(
     contact: contactFacts(ctx, deal),
     arrivedAt,
     firstContactAt: firstHumanContactAt(ctx, deal),
+    lastAttemptAt: lastHumanContactAt(ctx, deal),
     stageId: deal.stageId,
     source: deal.source,
     paid: isPaidSource(deal.source),

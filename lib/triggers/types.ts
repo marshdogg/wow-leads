@@ -198,8 +198,14 @@ export interface SpeedToLeadFacts {
   contact: ContactFacts;
   /** When the lead came in. Null means the record cannot support this trigger. */
   arrivedAt: Date | null;
-  /** First time a person tried to reach them. Null = still unworked. */
+  /** First time a person tried to reach them. Null = never attempted. */
   firstContactAt: Date | null;
+  /**
+   * Most recent attempt. An unanswered voicemail is an attempt, not a
+   * conversation — a lead still sitting in `new` has not been worked no
+   * matter how many times we rang it.
+   */
+  lastAttemptAt: Date | null;
   /** Must still be sitting in the `new` stage. */
   stageId: string;
   /** "Facebook Ads", "Door Hanger", … */

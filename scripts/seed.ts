@@ -668,11 +668,17 @@ const NEW_LEAD_ARRIVAL: Record<
     body: "Web form submitted — Google Ads, interior enquiry, 3 rooms",
   },
   n2: {
-    createdDaysAgo: 26 / 24,
+    // Arrived four hours before anyone rang back. That gap *is* the
+    // speed-to-lead breach: the SLA measures arrival → first contact, so a
+    // lead contacted the same minute it lands has nothing to escalate however
+    // stale it later goes. Marshall's card copy — "Call back — left
+    // voicemail" — needs the voicemail to exist, so the fix is an earlier
+    // arrival rather than a dropped touchpoint.
+    createdDaysAgo: 30 / 24,
     body: "Called the number on the yard sign at a job in progress",
     contact: {
       channel: "CALL",
-      body: "Left a voicemail — no answer, nobody assigned to chase it",
+      body: "Left a voicemail — four hours after the call came in, nobody assigned to chase it",
     },
   },
   n3: {

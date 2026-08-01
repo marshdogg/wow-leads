@@ -99,7 +99,10 @@ test("collapse state and list sort persist across a reload", async ({
         await page.reload();
         return page.getByTestId("list-head-name").getAttribute("data-sort");
       },
-      { timeout: 30_000, intervals: [500, 1000, 2000] },
+      // Generous on purpose. The write is fire-and-forget from the client and
+      // lands on a shared Neon instance whose latency varies a lot under load
+      // — a slow round trip is not the failure this test is looking for.
+      { timeout: 60_000, intervals: [500, 1000, 2000, 4000] },
     )
     .toBe("asc");
 
@@ -109,7 +112,10 @@ test("collapse state and list sort persist across a reload", async ({
         await page.goto("/board?pipeline=resi&view=board");
         return page.getByTestId("column-past").getAttribute("data-collapsed");
       },
-      { timeout: 30_000, intervals: [500, 1000, 2000] },
+      // Generous on purpose. The write is fire-and-forget from the client and
+      // lands on a shared Neon instance whose latency varies a lot under load
+      // — a slow round trip is not the failure this test is looking for.
+      { timeout: 60_000, intervals: [500, 1000, 2000, 4000] },
     )
     .toBe("true");
 

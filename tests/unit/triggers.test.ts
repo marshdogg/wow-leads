@@ -740,6 +740,7 @@ function speedToLead(overrides: Partial<SpeedToLeadFacts> = {}): SpeedToLeadFact
     contact: calla,
     arrivedAt: minutesBefore(NOW, 90),
     firstContactAt: null,
+    lastAttemptAt: null,
     stageId: "new",
     source: "Facebook Ads",
     paid: true,
@@ -803,13 +804,43 @@ describe("speed-to-lead trigger", () => {
     expect(result.reasons[1]).toBe("Speed-to-lead SLA is 15 minutes to first contact");
   });
 
-  it("stops once somebody has actually made contact", () => {
-    const result = evaluateSpeedToLead(
-      speedToLead({ firstContactAt: minutesBefore(NOW, 80) }),
+  it("goes quiet only while a recent attempt is still breathing", () => {
+    // An attempt resets the chase clock — but only for the warning window.
+    const justTried = speedToLead({
+      firstContactAt: minutesBefore(NOW, 5),
+      lastAttemptAt: minutesBefore(NOW, 5),
+    });
+    expect(evaluateSpeedToLead(justTried).eligible).toBe(false);
+    expect(severityFor(justTried)).toBe("on_track");
+  });
+
+  it("escalates a lead that was rung once and then left in New", () => {
+    // n2's shape: arrived 30h ago, one voicemail 26h ago, never answered,
+    // never moved. A single unanswered attempt is not "handled" — and the
+    // old model called this "inside the SLA", which was plainly false.
+    const voicemailed = speedToLead({
+      arrivedAt: minutesBefore(NOW, 30 * 60),
+      firstContactAt: minutesBefore(NOW, 26 * 60),
+      lastAttemptAt: minutesBefore(NOW, 26 * 60),
+    });
+    const result = evaluateSpeedToLead(voicemailed);
+    expect(result.eligible).toBe(true);
+    expect(severityFor(voicemailed)).toBe("breach");
+    expect(result.reasons[0]).toContain("still sitting in New");
+    expect(result.reasons).toContain(
+      "First response took 4 hours against a 15-minute target",
     );
-    expect(result.eligible).toBe(false);
-    expect(result.reasons[0]).toContain("inside the SLA");
-    expect(severityFor(speedToLead({ firstContactAt: NOW }))).toBe("on_track");
+  });
+
+  it("never describes a late first response as being inside the SLA", () => {
+    const late = speedToLead({
+      arrivedAt: minutesBefore(NOW, 24 * 60),
+      firstContactAt: minutesBefore(NOW, 20 * 60),
+      lastAttemptAt: minutesBefore(NOW, 20 * 60),
+    });
+    for (const reason of evaluateSpeedToLead(late).reasons) {
+      expect(reason).not.toContain("inside the SLA");
+    }
   });
 
   it("stops once the lead has moved out of the New column", () => {
@@ -854,6 +885,15 @@ describe("speed-to-lead trigger", () => {
     expect(humaniseMinutes(8 * 60 + 20)).toBe("8 hours 20 minutes");
     expect(humaniseMinutes(24 * 60)).toBe("1 day");
     expect(humaniseMinutes(50 * 60)).toBe("2 days 2 hours");
+  });
+
+  it("calls out an unassigned lead rather than naming nobody as the owner", () => {
+    const orphan = speedToLead({ ownerName: "Unassigned", ownerUserId: null });
+    expect(evaluateSpeedToLead(orphan).reasons).toContain(
+      "Nobody is assigned to this lead",
+    );
+    expect(escalationNote(orphan)).toContain("Unassigned.");
+    expect(escalationNote(orphan)).not.toContain("Assigned to Unassigned");
   });
 
   it("writes an internal note that names the lead, the wait and the owner", () => {
