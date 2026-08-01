@@ -9,6 +9,8 @@
 
 import type {
   Estimator,
+  LeadSource,
+  LeadSourceGroup,
   PipelineConfig,
   PipelineId,
   TagStyle,
@@ -31,6 +33,7 @@ const RESI_TRACKS: { id: TrackFilterId; label: string }[] = [
   { id: "referral", label: "Referral" },
   { id: "repeat", label: "Repeat work" },
   { id: "revival", label: "Revival" },
+  { id: "neverquoted", label: "Never quoted" },
 ];
 
 // New Leads deliberately has no track control — the source is a card metric
@@ -52,7 +55,14 @@ export const PIPES: Record<PipelineId, PipelineConfig> = {
     showStageValue: false,
     neglectDays: 14,
     stages: [
-      { id: "past", label: "Past Customer", hint: "Eligible, not yet approached" },
+      // Renamed from "Past Customer": the never-quoted track puts people here
+      // who have contact details and no job, so the old label was false for
+      // half the column. The hint already said the truer thing.
+      {
+        id: "past",
+        label: "Eligible",
+        hint: "Contact on file, not yet approached",
+      },
       { id: "first", label: "Followed Up", hint: "First ask made" },
       { id: "second", label: "2nd Follow-up", hint: "Second touch, no answer yet" },
       { id: "promo", label: "Promo Offered", hint: "Offer on the table" },
@@ -231,6 +241,15 @@ export const TRACK_STYLE: Record<TrackId, TrackStyle> = {
     border: "#4a3a17",
     label: "REVIVAL",
   },
+  // Deliberately the quietest chip on the board. Green is active work we own,
+  // amber is paused-not-dead; this is the least-proven population in the
+  // pipeline and the colour should not overstate it.
+  neverquoted: {
+    bg: "#23271f",
+    color: "#98a298",
+    border: "#3b423a",
+    label: "NEVER QUOTED",
+  },
   inbound: {
     bg: "#16283a",
     color: "#7fb2e0",
@@ -367,4 +386,62 @@ export function stageValueTotal(
     return acc + (Number.isFinite(n) ? n : 0);
   }, 0);
   return sum ? `$${Math.round(sum)}K in stage` : null;
+}
+
+/* -------------------------------------------------------------------------
+   Lead sources
+   ------------------------------------------------------------------------- */
+
+/**
+ * The source catalogue, grouped the way a franchise owner thinks about spend.
+ * The New Leads filter renders these groups; the Manager dashboard attributes
+ * revenue against the same values, so a source added here shows up in both
+ * without a second edit.
+ */
+export const LEAD_SOURCE_GROUPS: {
+  group: LeadSourceGroup;
+  sources: LeadSource[];
+}[] = [
+  {
+    group: "Paid digital",
+    sources: [
+      "Facebook Ads",
+      "Instagram Ads",
+      "Google Ads",
+      "Google LSA",
+      "Landing Page",
+    ],
+  },
+  { group: "Marketplaces", sources: ["Angi", "Thumbtack", "Nextdoor", "Yelp"] },
+  { group: "Owned inbound", sources: ["Web Form", "Phone Enquiry"] },
+  {
+    group: "Local area",
+    sources: [
+      "Yard Sign",
+      "Truck Wrap",
+      "Door Hanger",
+      "Canvassing",
+      "Job Site",
+      "Neighbor Letter",
+      "Direct Mail",
+    ],
+  },
+  { group: "Events", sources: ["Trade Show", "Home Show"] },
+  {
+    group: "Relationships",
+    sources: ["Past Customer", "Partner Referral", "GC Referral"],
+  },
+  { group: "Outbound", sources: ["Cold Call"] },
+];
+
+export const LEAD_SOURCES: LeadSource[] = LEAD_SOURCE_GROUPS.flatMap(
+  (g) => g.sources,
+);
+
+/** Which group a source belongs to, for the filter's section headings. */
+export function sourceGroup(source: string): LeadSourceGroup | null {
+  return (
+    LEAD_SOURCE_GROUPS.find((g) => g.sources.includes(source as LeadSource))
+      ?.group ?? null
+  );
 }

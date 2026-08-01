@@ -94,3 +94,27 @@ export function humaniseMinutes(minutes: number): string {
   if (restHours < 1) return dayPart;
   return `${dayPart} ${restHours === 1 ? "1 hour" : `${restHours} hours`}`;
 }
+
+/**
+ * A span of days as a person would say it: "22 days", "14 months", "2 years".
+ *
+ * One helper rather than per-site arithmetic, because the WHY THIS FIRED panel
+ * puts several durations next to each other and they have to agree. Deriving
+ * one bullet from calendar months and its neighbour from `days / 30` produced
+ * "Enquired June 2025 (13 months ago)" directly above "Untouched for 14
+ * months" — same elapsed time, two numbers, in the panel whose entire job is
+ * being trustworthy at a glance.
+ */
+export function humaniseDays(days: number): string {
+  if (days < 1) return "less than a day";
+  if (days < 60) return pluralDays(days);
+
+  // 30.44 is the mean month; /30 drifts by a month across a year.
+  const months = Math.round(days / 30.44);
+  if (months < 24) return pluralMonths(months);
+
+  const years = Math.floor(months / 12);
+  const rest = months % 12;
+  const yearPart = years === 1 ? "1 year" : `${years} years`;
+  return rest === 0 ? yearPart : `${yearPart} ${pluralMonths(rest)}`;
+}

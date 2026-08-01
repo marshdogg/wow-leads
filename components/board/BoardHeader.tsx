@@ -11,6 +11,9 @@ import type { BoardView, PipelineConfig, TrackFilterId } from "@/lib/types";
 export function BoardHeader({
   pipeline,
   track,
+  source,
+  sourceOptions,
+  onSource,
   onTrack,
   view,
   onView,
@@ -20,6 +23,11 @@ export function BoardHeader({
   pipeline: PipelineConfig;
   track: TrackFilterId;
   onTrack: (t: TrackFilterId) => void;
+  /** Current source filter — a `LeadSource` value, or "all". */
+  source: string;
+  /** Only the sources this pipeline's deals actually use. */
+  sourceOptions: string[];
+  onSource: (s: string) => void;
   view: BoardView;
   onView: (v: BoardView) => void;
   anyExpanded: boolean;
@@ -116,25 +124,51 @@ export function BoardHeader({
           </div>
         )}
 
-        <button
-          type="button"
+        <div
           className="hover:!border-[#3b423a]"
           style={{
+            position: "relative",
             fontSize: 13,
             color: "#c6cdc6",
             background: "#141814",
             border: "1px solid #262b25",
             borderRadius: 10,
             padding: "11px 15px",
-            cursor: "pointer",
             display: "flex",
             alignItems: "center",
             gap: 24,
           }}
         >
-          <span>{pipeline.filter}</span>
+          <span>
+            {source === "all" ? pipeline.filter : source}
+          </span>
           <ChevronDown size={13} strokeWidth={2} aria-hidden color="#5c655c" />
-        </button>
+          {/* A native select layered over the button: it keeps the designed
+              chrome while giving keyboard and screen-reader behaviour for
+              free, which a div-and-popover would have to reimplement. */}
+          <select
+            aria-label="Filter by source"
+            data-testid="source-filter"
+            value={source}
+            onChange={(e) => onSource(e.target.value)}
+            style={{
+              position: "absolute",
+              inset: 0,
+              width: "100%",
+              height: "100%",
+              opacity: 0,
+              cursor: "pointer",
+              fontFamily: "inherit",
+            }}
+          >
+            <option value="all">{pipeline.filter}</option>
+            {sourceOptions.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </div>
 
         {view === "board" && (
           <button

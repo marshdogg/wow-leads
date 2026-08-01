@@ -13,12 +13,14 @@ import {
   touchpoints,
 } from "@/db/schema";
 import { isCustomerContactChannel } from "@/lib/repositories/rules";
+import { enquiryChannelFor } from "./never-quoted";
 import { isPaidSource } from "./speed-to-lead";
 import type { ContactChannel, TriggerType } from "@/lib/types";
-import { monthName } from "./dates";
+import { daysBetween, monthName } from "./dates";
 import {
   dayInSequence,
   isAbsent,
+  completionEvent,
   jobScopeAreas,
   jobWorkType,
   proximityFrom,
@@ -39,6 +41,7 @@ import type {
   RevivalFacts,
   ScopeFacts,
   NeighbourCampaignFacts,
+  NeverQuotedFacts,
   SeasonalFacts,
   SequenceFacts,
   SequenceReference,
@@ -306,9 +309,7 @@ export function elevenMonthFacts(
   if (deal.pipelineId !== "resi") return null;
 
   const events = dealTouchpoints(ctx, deal);
-  const jobEvent = [...events]
-    .reverse()
-    .find((t) => t.channel.toUpperCase() === "JOB");
+  const jobEvent = completionEvent(events);
   const jobCompletedAt =
     jobEvent?.occurredAt ??
     parseMonthYear(metricValue(deal, "COMPLETED")) ??
@@ -646,9 +647,7 @@ export function neighbourCampaignFacts(
   if (targets.length === 0) return [];
 
   const events = dealTouchpoints(ctx, deal);
-  const jobEvent = [...events]
-    .reverse()
-    .find((t) => t.channel.toUpperCase() === "JOB");
+  const jobEvent = completionEvent(events);
   if (!jobEvent) return [];
 
   const jobAddress = deal.accountLine;
@@ -712,4 +711,70 @@ function knownAddresses(ctx: FactContext): Set<string> {
 
 export function normaliseAddress(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ").replace(/[.,]/g, "");
+}
+
+/* -------------------------------------------------------------------------
+   Never quoted
+   ------------------------------------------------------------------------- */
+
+export function neverQuotedFacts(
+  ctx: FactContext,
+  deal: DealRow,
+): NeverQuotedFacts | null {
+  if (deal.pipelineId !== "resi") return null;
+
+  // The track is the declaration. A quote metric that says anything other
+  // than "Never", or a completed job, means this record has better material
+  // to work with and a different trigger owns it.
+  const quoted = metricValue(deal, "QUOTED");
+  const everQuoted = Boolean(quoted) && !/^never$/i.test(quoted!.trim());
+  if (deal.track !== "neverquoted" && !isNeverQuotedShape(deal, quoted)) return null;
+
+  const events = dealTouchpoints(ctx, deal);
+  if (events.some((t) => t.channel.toUpperCase() === "JOB")) return null;
+
+  // "ENQUIRED" carries a date on some records ("Jun 2025") and a channel on
+  // others ("Home show"). Parse it as a date and accept null — the copy is
+  // built to work without one.
+  const enquired = metricValue(deal, "ENQUIRED");
+  const enquiredAt =
+    parseMonthYear(enquired) ??
+    (deal.stale.includes("enquired") ? parseRelativeStale(deal.stale, ctx.now) : null);
+
+  const lastContact = lastHumanContactAt(ctx, deal);
+  const unworkedFrom = lastContact ?? enquiredAt ?? parseRelativeStale(deal.stale, ctx.now);
+
+  return {
+    kind: "never_quoted",
+    dealId: deal.id,
+    dealName: deal.name,
+    contact: contactFacts(ctx, deal),
+    enquiredAt,
+    enquiryChannel: enquiryChannelFor(deal.source),
+    sourceLabel: deal.source,
+    // On a never-quoted record the work-type tag cannot describe a job,
+    // because there isn't one — it can only have come from the enquiry.
+    enquiredAbout: workTypeTag(deal),
+    unworkedDays: unworkedFrom ? daysBetween(unworkedFrom, ctx.now) : null,
+    everQuoted,
+    now: ctx.now,
+  };
+}
+
+/**
+ * A record that walks like a never-quoted lead even without the track set:
+ * an explicit "Never" quote metric and no job value on file.
+ */
+function isNeverQuotedShape(deal: DealRow, quoted: string | null): boolean {
+  return (
+    Boolean(quoted) &&
+    /^never$/i.test(quoted!.trim()) &&
+    !metricValue(deal, "LAST JOB")
+  );
+}
+
+/** The work-type tag, or null when the account carries none. */
+function workTypeTag(deal: DealRow): string | null {
+  const tag = deal.tags.find((t) => WORK_TYPE_TAGS.includes(t.toUpperCase()));
+  return tag ? tag.toLowerCase() : null;
 }

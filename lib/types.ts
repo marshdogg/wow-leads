@@ -50,7 +50,16 @@ export type StageId =
  * filter, so they share one type — but the sets are per-pipeline, see
  * `PipelineConfig.trackOptions`.
  */
-export type ResiTrackId = "referral" | "repeat" | "revival";
+export type ResiTrackId =
+  | "referral"
+  | "repeat"
+  | "revival"
+  /**
+   * Contact details on file, never quoted. Distinct from `revival`, which
+   * needs a lost deal to revive — these people never got a number, so there
+   * is no price objection to wait out and nothing for a draft to reference.
+   */
+  | "neverquoted";
 export type NewLeadTrackId = "inbound" | "canvassed" | "event";
 export type TrackId = ResiTrackId | NewLeadTrackId;
 export type TrackFilterId = "all" | TrackId;
@@ -185,22 +194,54 @@ export interface Deal {
   sourcedFromDealId?: string | null;
 }
 
+/**
+ * Where a lead came from. Grouped by how the demand was created, because the
+ * Manager dashboard attributes revenue by source and a franchise owner decides
+ * spend per channel — so "Facebook Ads" and "Landing Page" have to be separate
+ * even though both arrive as a web enquiry.
+ */
 export type LeadSource =
+  // Existing relationships
   | "Past Customer"
-  | "Yard Sign"
-  | "Google Ads"
   | "Partner Referral"
-  | "Cold Call"
-  | "Web Form"
-  | "Door Hanger"
   | "GC Referral"
-  // Local-area marketing and net-new demand.
+  // Paid digital
   | "Facebook Ads"
   | "Instagram Ads"
-  | "Trade Show"
+  | "Google Ads"
+  | "Google LSA"
+  | "Landing Page"
+  // Marketplaces and listings
+  | "Angi"
+  | "Thumbtack"
+  | "Nextdoor"
+  | "Yelp"
+  // Owned inbound
+  | "Web Form"
+  | "Phone Enquiry"
+  // Local-area marketing, out in the world
+  | "Yard Sign"
+  | "Truck Wrap"
+  | "Door Hanger"
   | "Canvassing"
   | "Job Site"
-  | "Neighbor Letter";
+  | "Neighbor Letter"
+  | "Direct Mail"
+  // Events
+  | "Trade Show"
+  | "Home Show"
+  // Outbound
+  | "Cold Call";
+
+/** Source groupings, used by the New Leads source filter. */
+export type LeadSourceGroup =
+  | "Paid digital"
+  | "Marketplaces"
+  | "Owned inbound"
+  | "Local area"
+  | "Events"
+  | "Relationships"
+  | "Outbound";
 
 export type DealAction =
   | "Review draft"
@@ -282,7 +323,8 @@ export type TriggerType =
   | "revival"
   | "sequence"
   | "speed_to_lead"
-  | "neighbour_campaign";
+  | "neighbour_campaign"
+  | "never_quoted";
 
 export type ApprovalStatus =
   | "drafted"

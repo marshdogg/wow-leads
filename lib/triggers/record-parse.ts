@@ -140,6 +140,35 @@ export function splitAreas(source: string | undefined): string[] {
 }
 
 /**
+ * Does this JOB touchpoint record work being *finished*?
+ *
+ * The `JOB` channel carries two different events. A completion —
+ * "Interior repaint completed — 4 rooms, hallway, stairwell · $8,400" — and,
+ * from `bookDeal`, an estimate booking: "Estimate scheduled — Thu Aug 6 at
+ * 10:00 AM with Kris Jolin · EST-40218".
+ *
+ * Reading the newest JOB row as the completion date conflates them, and the
+ * failure is silent and severe: booking an estimate for a past customer made
+ * their 11-month warranty trigger see a job finished today, so it stopped
+ * firing. It would also have let a neighbour draft claim "we just finished"
+ * about a house where nothing had been painted yet.
+ *
+ * So the test is what the row says happened, not which channel it arrived on.
+ */
+export function isCompletionRecord(job: TouchpointRow): boolean {
+  return /\b(completed|finished)\b/i.test(job.body);
+}
+
+/** The most recent JOB row that records work actually being finished. */
+export function completionEvent(
+  events: TouchpointRow[],
+): TouchpointRow | undefined {
+  return [...events]
+    .reverse()
+    .find((t) => t.channel.toUpperCase() === "JOB" && isCompletionRecord(t));
+}
+
+/**
  * The kind of work a completion record describes.
  *
  *   "Exterior repaint completed — siding, trim and front door · $9,250"

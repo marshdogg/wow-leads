@@ -1,6 +1,7 @@
 import type { TriggerType } from "@/lib/types";
 import { elevenMonthTrigger } from "./eleven-month";
 import { neighbourCampaignTrigger } from "./neighbour-campaign";
+import { neverQuotedTrigger } from "./never-quoted";
 import { revivalTrigger } from "./revival";
 import { seasonalTrigger } from "./seasonal";
 import { sequenceTrigger } from "./sequence";
@@ -35,6 +36,12 @@ export {
   evaluateNeighbourCampaign,
   CREW_WINDOW_DAYS,
 } from "./neighbour-campaign";
+export {
+  neverQuotedTrigger,
+  evaluateNeverQuoted,
+  enquiryChannelFor,
+  MIN_UNWORKED_DAYS,
+} from "./never-quoted";
 
 /**
  * Trigger dispatch.
@@ -60,6 +67,7 @@ export const TRIGGER_TYPES: TriggerType[] = [
   "sequence",
   "speed_to_lead",
   "neighbour_campaign",
+  "never_quoted",
 ];
 
 export const TRIGGER_LABELS: Record<TriggerType, string> = {
@@ -69,6 +77,7 @@ export const TRIGGER_LABELS: Record<TriggerType, string> = {
   sequence: sequenceTrigger.label,
   speed_to_lead: speedToLeadTrigger.label,
   neighbour_campaign: neighbourCampaignTrigger.label,
+  never_quoted: neverQuotedTrigger.label,
 };
 
 /**
@@ -83,6 +92,7 @@ export const TRIGGER_OUTCOMES: Record<TriggerType, TriggerOutcome> = {
   sequence: sequenceTrigger.outcome,
   speed_to_lead: speedToLeadTrigger.outcome,
   neighbour_campaign: neighbourCampaignTrigger.outcome,
+  never_quoted: neverQuotedTrigger.outcome,
 };
 
 export function outcomeFor(type: TriggerType): TriggerOutcome {
@@ -103,6 +113,8 @@ export function evaluateTrigger(facts: TriggerFacts): TriggerEvaluation {
       return speedToLeadTrigger.evaluate(facts);
     case "neighbour_campaign":
       return neighbourCampaignTrigger.evaluate(facts);
+    case "never_quoted":
+      return neverQuotedTrigger.evaluate(facts);
   }
 }
 
@@ -132,6 +144,8 @@ export function describeTrigger(facts: TriggerFacts): TriggerPresentation {
         return present(speedToLeadTrigger, facts);
       case "neighbour_campaign":
         return present(neighbourCampaignTrigger, facts);
+      case "never_quoted":
+        return present(neverQuotedTrigger, facts);
     }
   })();
 
@@ -185,6 +199,9 @@ export function chipForTrigger(type: TriggerType): string {
       return CHIP_TRIGGER;
     case "seasonal":
     case "sequence":
+    // A never-quoted record has been eligible for months; nothing happened
+    // today except that we finally looked. The quieter chip is the honest one.
+    case "never_quoted":
       return CHIP_SEQUENCE;
   }
 }

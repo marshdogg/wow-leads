@@ -176,6 +176,9 @@ export function nextActionFor(approval: Approval, now: Date): PlannedNextAction 
     case "neighbour_campaign":
       // The crew is still in the street; a knock beats a wait.
       return { label: "Door-knock the new neighbour lead", dueAt: addDays(now, 1) };
+    case "never_quoted":
+      // The ask was for a number, so the next step is producing one.
+      return { label: "Get a scope and a price to them", dueAt: addDays(now, 3) };
     case "speed_to_lead":
       // Unreachable in practice — a speed-to-lead escalation never becomes an
       // approval, so nothing gets here to be decided. Kept total, and kept

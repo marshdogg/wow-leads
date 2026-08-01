@@ -15,6 +15,7 @@ import {
   elevenMonthFacts,
   loadFactContext,
   neighbourCampaignFacts,
+  neverQuotedFacts,
   revivalFacts,
   seasonalFacts,
   sequenceFacts,
@@ -86,6 +87,7 @@ const RUNNERS: TriggerRunner[] = [
   { type: "seasonal", build: one(seasonalFacts) },
   { type: "revival", build: one(revivalFacts) },
   { type: "sequence", build: one(sequenceFacts) },
+  { type: "never_quoted", build: one(neverQuotedFacts) },
   { type: "speed_to_lead", build: one(speedToLeadFacts) },
   // The only many-per-deal builder: one draft per canvassed address.
   { type: "neighbour_campaign", build: neighbourCampaignFacts },

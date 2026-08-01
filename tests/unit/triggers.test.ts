@@ -22,19 +22,24 @@ import {
   describeTrigger,
   escalationNextAction,
   escalationNote,
+  MIN_UNWORKED_DAYS,
+  enquiryChannelFor,
   evaluateNeighbourCampaign,
+  evaluateNeverQuoted,
   evaluateSpeedToLead,
   evaluateTrigger,
   isPaidSource,
   outcomeFor,
   severityFor,
 } from "@/lib/triggers";
-import { humaniseMinutes } from "@/lib/triggers/text";
+import { humaniseDays, humaniseMinutes } from "@/lib/triggers/text";
 import { renderTemplate } from "@/lib/agents/template-drafter";
 import { DEFAULT_SENDER } from "@/lib/agents/types";
 import {
+  completionEvent,
   dayInSequence,
   isAbsent,
+  isCompletionRecord,
   jobScopeAreas,
   parseInitialType,
   parseMonthDay,
@@ -51,6 +56,7 @@ import type {
   ElevenMonthFacts,
   RevivalFacts,
   NeighbourCampaignFacts,
+  NeverQuotedFacts,
   SeasonalFacts,
   SequenceFacts,
   SpeedToLeadFacts,
@@ -636,6 +642,29 @@ describe("record parsing", () => {
     expect(splitAreas(undefined)).toEqual([]);
   });
 
+  it("tells a finished job from a booked estimate on the same channel", () => {
+    // Regression, and a severe one: `bookDeal` writes an estimate booking on
+    // the JOB channel too. Taking the newest JOB row as the completion made
+    // booking an estimate for a past customer reset their warranty clock to
+    // zero, silently switching off the 11-month trigger.
+    const completion = {
+      channel: "JOB",
+      body: "Interior repaint completed — 4 rooms, hallway, stairwell · $8,400",
+      occurredAt: new Date(2025, 7, 22),
+    } as Parameters<typeof completionEvent>[0][number];
+    const booking = {
+      channel: "JOB",
+      body: "Estimate scheduled — Thu Aug 6 at 10:00 AM with Kris Jolin · EST-40218",
+      occurredAt: new Date(2026, 7, 1),
+    } as Parameters<typeof completionEvent>[0][number];
+
+    expect(isCompletionRecord(completion)).toBe(true);
+    expect(isCompletionRecord(booking)).toBe(false);
+    // Newest first would pick the booking; it must pick the completion.
+    expect(completionEvent([completion, booking])).toBe(completion);
+    expect(completionEvent([booking])).toBeUndefined();
+  });
+
   it("reads a pronoun only from what a rep wrote down", () => {
     expect(pronounFrom("Warm and direct. She replies within the hour.")).toBe("she");
     expect(pronounFrom("Ask for him at the site office.")).toBe("he");
@@ -969,7 +998,7 @@ describe("what reaches the Approvals queue", () => {
   });
 
   it("has a label and an outcome for every trigger type", () => {
-    expect(TRIGGER_TYPES).toHaveLength(6);
+    expect(TRIGGER_TYPES).toHaveLength(7);
     for (const type of TRIGGER_TYPES) {
       expect(TRIGGER_LABELS[type]).toBeTruthy();
       expect(["draft", "escalate"]).toContain(outcomeFor(type));
@@ -989,5 +1018,204 @@ describe("what reaches the Approvals queue", () => {
     expect(door.subtitle).toBe(
       "Next to 2308 Tunlaw Rd NW · exterior finished Jul 29 · New Leads",
     );
+  });
+});
+
+/* -------------------------------------------------------------------------
+   Never quoted — the track with nothing to reference
+   ------------------------------------------------------------------------- */
+
+const adaeze: ContactFacts = {
+  name: "Adaeze Nwosu",
+  firstName: "Adaeze",
+  prefers: "SMS",
+  address: "(202) 555-0173",
+  pronoun: null,
+};
+
+function neverQuoted(overrides: Partial<NeverQuotedFacts> = {}): NeverQuotedFacts {
+  return {
+    kind: "never_quoted",
+    dealId: "r10",
+    dealName: "Adaeze Nwosu",
+    contact: adaeze,
+    enquiredAt: new Date(2025, 5, 1), // June 2025 — 14 months before NOW
+    enquiryChannel: "web",
+    sourceLabel: "Landing Page",
+    enquiredAbout: "interior",
+    unworkedDays: 426,
+    everQuoted: false,
+    now: NOW,
+    ...overrides,
+  };
+}
+
+describe("never-quoted trigger", () => {
+  it("fires on a web enquiry that never got a number", () => {
+    const result = evaluateNeverQuoted(neverQuoted());
+    expect(result.eligible).toBe(true);
+    expect(result.reasons).toEqual([
+      "Enquired June 2025 (14 months ago) via Landing Page",
+      "No quote ever went out — there is no number on file to follow up",
+      "Asked about interior work — the only scope we captured",
+      "Untouched for 14 months — well past the point a rep would pick it up unprompted",
+    ]);
+  });
+
+  it("refuses the moment a quote exists — that is a different trigger's job", () => {
+    const result = evaluateNeverQuoted(neverQuoted({ everQuoted: true }));
+    expect(result.eligible).toBe(false);
+    expect(result.reasons[0]).toContain("not a never-quoted lead");
+  });
+
+  it("fires without an enquiry date when the channel is known", () => {
+    // r11's shape: "ENQUIRED: Home show" records how, never when.
+    const result = evaluateNeverQuoted(
+      neverQuoted({
+        enquiredAt: null,
+        enquiryChannel: "event",
+        sourceLabel: "Home Show",
+        enquiredAbout: "exterior",
+        unworkedDays: 22,
+      }),
+    );
+    expect(result.eligible).toBe(true);
+    expect(result.reasons[0]).toBe(
+      "Enquired via Home Show — no date captured on the record",
+    );
+    expect(result.reasons[3]).toBe("Untouched for 22 days");
+  });
+
+  it("will not fire with neither a date nor a channel to reference", () => {
+    const result = evaluateNeverQuoted(
+      neverQuoted({ enquiredAt: null, enquiryChannel: "unknown" }),
+    );
+    expect(result.eligible).toBe(false);
+    expect(result.reasons[0]).toContain("nothing on file to reference");
+  });
+
+  it("leaves a freshly worked enquiry to the rep who owns it", () => {
+    const result = evaluateNeverQuoted(
+      neverQuoted({ unworkedDays: MIN_UNWORKED_DAYS - 1 }),
+    );
+    expect(result.eligible).toBe(false);
+    expect(result.reasons[0]).toContain("a rep owns");
+  });
+
+  it("fires on the exact day the unworked window opens", () => {
+    expect(
+      evaluateNeverQuoted(neverQuoted({ unworkedDays: MIN_UNWORKED_DAYS })).eligible,
+    ).toBe(true);
+  });
+
+  it("says the scope was never captured rather than guessing one", () => {
+    const result = evaluateNeverQuoted(neverQuoted({ enquiredAbout: null }));
+    expect(result.eligible).toBe(true);
+    expect(result.reasons[2]).toBe(
+      "No scope captured at the enquiry — the first ask has to establish it",
+    );
+  });
+
+  it("cannot tell an age it has no dates for", () => {
+    const result = evaluateNeverQuoted(neverQuoted({ unworkedDays: null }));
+    expect(result.eligible).toBe(false);
+  });
+
+  it("quotes one elapsed time, not two that disagree", () => {
+    // Regression: the enquiry age came from calendar months and the untouched
+    // figure from days/30, so the same panel read "(13 months ago)" directly
+    // above "Untouched for 14 months". Both now share one helper.
+    const enquiredAt = new Date(2025, 5, 1);
+    const result = evaluateNeverQuoted(
+      neverQuoted({
+        enquiredAt,
+        unworkedDays: Math.floor((NOW.getTime() - enquiredAt.getTime()) / 86_400_000),
+      }),
+    );
+    const age = /\((\d+ months?) ago\)/.exec(result.reasons[0])?.[1];
+    const untouched = /Untouched for (\d+ months?)/.exec(result.reasons[3])?.[1];
+    expect(age).toBeDefined();
+    expect(untouched).toBe(age);
+  });
+
+  it("scales the wording to the span", () => {
+    expect(humaniseDays(0)).toBe("less than a day");
+    expect(humaniseDays(22)).toBe("22 days");
+    expect(humaniseDays(59)).toBe("59 days");
+    expect(humaniseDays(60)).toBe("2 months");
+    expect(humaniseDays(425)).toBe("14 months");
+    expect(humaniseDays(730)).toBe("2 years");
+    expect(humaniseDays(760)).toBe("2 years 1 month");
+  });
+
+  it("maps a source to how we actually met them", () => {
+    expect(enquiryChannelFor("Home Show")).toBe("event");
+    expect(enquiryChannelFor("Trade Show")).toBe("event");
+    expect(enquiryChannelFor("Landing Page")).toBe("web");
+    expect(enquiryChannelFor("Facebook Ads")).toBe("web");
+    expect(enquiryChannelFor("Phone Enquiry")).toBe("phone");
+    expect(enquiryChannelFor("Cold Call")).toBe("phone");
+    expect(enquiryChannelFor("Yard Sign")).toBe("unknown");
+  });
+});
+
+describe("never-quoted copy", () => {
+  const draft = (facts: NeverQuotedFacts) =>
+    renderTemplate({
+      facts,
+      reasons: [],
+      channel: "SMS",
+      sender: DEFAULT_SENDER,
+    });
+
+  it("matches the reference for a dated web enquiry", () => {
+    expect(draft(neverQuoted())).toBe(
+      "Hi Adaeze — Marshall at WOW 1 DAY PAINTING. You asked about interior work " +
+        "back in June last year and I do not think we ever got you a proper number. " +
+        "If it is still on your list I can have someone take a look and price it " +
+        "properly this time.",
+    );
+  });
+
+  it("opens with meeting them, not with them asking, when we met in person", () => {
+    const body = draft(
+      neverQuoted({
+        enquiredAt: null,
+        enquiryChannel: "event",
+        sourceLabel: "Home Show",
+        enquiredAbout: "exterior",
+      }),
+    );
+    expect(body).toContain("We met at the home show and talked about exterior work");
+    // "you asked" would be false about someone whose hand we shook.
+    expect(body).not.toContain("You asked");
+    // And no stacked conjunctions where the opener already has one.
+    expect(body).not.toContain("work and I do not think");
+  });
+
+  it("never states a date the record did not capture", () => {
+    const body = draft(neverQuoted({ enquiredAt: null, enquiryChannel: "web" }));
+    expect(body).not.toMatch(/back in/);
+    expect(body).toContain("You asked about interior work and I do not think");
+  });
+
+  it("keeps the scope general when none was captured", () => {
+    const body = draft(neverQuoted({ enquiredAbout: null }));
+    expect(body).toContain("getting some painting done");
+  });
+
+  it("names the gap rather than pretending the silence did not happen", () => {
+    for (const channel of ["web", "event", "phone", "unknown"] as const) {
+      expect(draft(neverQuoted({ enquiryChannel: channel }))).toContain(
+        "I do not think we ever got you a proper number",
+      );
+    }
+  });
+
+  it("references no job, no price and no offer — none of which exist", () => {
+    const body = draft(neverQuoted());
+    for (const forbidden of ["warranty", "we finished", "quoted your", "offer", "%"]) {
+      expect(body.toLowerCase()).not.toContain(forbidden);
+    }
   });
 });

@@ -1,5 +1,5 @@
 import { createLoader, parseAsStringLiteral } from "nuqs/server";
-import { PIPELINE_IDS, PIPES } from "@/lib/pipelines";
+import { LEAD_SOURCES, PIPELINE_IDS, PIPES } from "@/lib/pipelines";
 import type { BoardView, PipelineId, TrackFilterId } from "@/lib/types";
 
 /**
@@ -29,6 +29,12 @@ const TRACK_FILTER_IDS: TrackFilterId[] = Array.from(
 
 const BOARD_VIEWS = ["board", "list"] as const;
 
+/**
+ * Source filter values, derived from the catalogue so a channel added to
+ * `LEAD_SOURCE_GROUPS` is immediately filterable without touching this file.
+ */
+const SOURCE_FILTER_IDS: string[] = ["all", ...LEAD_SOURCES];
+
 export const pipelineParser = parseAsStringLiteral(
   PIPELINE_IDS as PipelineId[],
 )
@@ -41,10 +47,14 @@ export const trackParser =
 export const viewParser =
   parseAsStringLiteral(BOARD_VIEWS).withDefault("board");
 
+export const sourceParser =
+  parseAsStringLiteral(SOURCE_FILTER_IDS).withDefault("all");
+
 export const boardSearchParams = {
   pipeline: pipelineParser,
   track: trackParser,
   view: viewParser,
+  source: sourceParser,
 };
 
 export const loadBoardSearchParams = createLoader(boardSearchParams);
@@ -53,4 +63,6 @@ export type BoardUrlState = {
   pipeline: PipelineId;
   track: TrackFilterId;
   view: BoardView;
+  /** A `LeadSource` value, or "all". */
+  source: string;
 };

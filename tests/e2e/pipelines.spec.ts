@@ -168,3 +168,36 @@ test("the Switcher renders Commercial, Biz Dev and Partner", async ({
     }
   }
 });
+
+test("the never-quoted track separates contacts on file from past customers", async ({
+  page,
+}) => {
+  await page.goto("/board?pipeline=resi&view=board");
+  // The stage is no longer called "Past Customer": half the column now holds
+  // people who have never had a job with us.
+  await expect(page.getByTestId("column-past")).toContainText("Eligible");
+  await expect(page.getByTestId("track-neverquoted")).toBeVisible();
+
+  await page.getByTestId("track-neverquoted").click();
+  const cards = page.locator('[data-testid^="lead-card-r"]');
+  await expect(cards).toHaveCount(2);
+  await expect(page.getByText("NEVER QUOTED").first()).toBeVisible();
+  // A never-quoted lead has no price to reference — that is the whole point.
+  await expect(page.getByTestId("lead-card-r10")).toContainText("Never");
+});
+
+test("the New Leads source filter narrows the board", async ({ page }) => {
+  await page.goto("/board?pipeline=newleads&view=board");
+  const cards = page.locator('[data-testid^="lead-card-n"]');
+  await expect(cards).toHaveCount(5);
+
+  const filter = page.getByTestId("source-filter");
+  await filter.selectOption("Landing Page");
+  await expect(cards).toHaveCount(1);
+
+  await filter.selectOption("Facebook Ads");
+  await expect(cards).toHaveCount(1);
+
+  await filter.selectOption("all");
+  await expect(cards).toHaveCount(5);
+});

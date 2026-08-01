@@ -12,6 +12,7 @@ import { joinList, lowerFirst, unpunctuated } from "@/lib/triggers/text";
 import type {
   ElevenMonthFacts,
   NeighbourCampaignFacts,
+  NeverQuotedFacts,
   RevivalFacts,
   SeasonalFacts,
   SequenceFacts,
@@ -56,6 +57,8 @@ export function renderTemplate(request: DraftRequest): string {
       return sequenceBody(facts, sender);
     case "neighbour_campaign":
       return neighbourBody(facts, sender);
+    case "never_quoted":
+      return neverQuotedBody(facts, sender);
     case "speed_to_lead":
       // Speed-to-lead never drafts a customer message — it raises an internal
       // alert. Reaching here means the runner routed an escalation down the
@@ -241,4 +244,73 @@ function neighbourBody(f: NeighbourCampaignFacts, sender: Sender): string {
   );
 
   return parts.join(" ");
+}
+
+/* -------------------------------------------------------------------------
+   Never quoted
+   ------------------------------------------------------------------------- */
+
+/**
+ * The reference:
+ *
+ *   Hi Adaeze — Marshall at WOW 1 DAY PAINTING. You asked about interior work
+ *   back in June last year and I do not think we ever got you a proper number.
+ *   If it is still on your list I can have someone take a look and price it
+ *   properly this time.
+ *
+ * Three things this template must get right, and each is a way the other
+ * templates would go wrong here:
+ *
+ * 1. **Reference the enquiry, never a job or a quote.** There isn't one.
+ * 2. **Match the opener to how we actually met them.** "You asked about" is
+ *    false for someone whose hand we shook at a home show; "we met" is false
+ *    for a landing-page form. The channel decides the first clause.
+ * 3. **Say we dropped it.** "I do not think we ever got you a proper number"
+ *    is the sentence that makes the rest credible. Reaching out after
+ *    fourteen months as though nothing happened invites the obvious question;
+ *    answering it first is disarming, and it is also simply true.
+ */
+function neverQuotedBody(f: NeverQuotedFacts, sender: Sender): string {
+  const parts: string[] = [
+    `Hi ${f.contact.firstName} — ${sender.firstName} at ${sender.company}.`,
+  ];
+
+  // The event opener already contains an "and" ("we met … and talked about"),
+  // so a bare second one stacks two conjunctions in a row. Comma it instead.
+  const opener = enquiryOpener(f);
+  const join = / and /.test(opener) ? ", and" : " and";
+  parts.push(`${opener}${join} I do not think we ever got you a proper number.`);
+  parts.push(
+    "If it is still on your list I can have someone take a look and price it properly this time.",
+  );
+
+  return parts.join(" ");
+}
+
+/**
+ * The opening clause, built from the channel and whatever the record knows
+ * about when and what. Every branch is a true sentence about a different
+ * shape of record; none of them assert a date that was never captured.
+ */
+function enquiryOpener(f: NeverQuotedFacts): string {
+  const about = f.enquiredAbout ? `${f.enquiredAbout} work` : "getting some painting done";
+  const when = f.enquiredAt ? ` ${enquiryWhen(f.enquiredAt, f.now)}` : "";
+
+  switch (f.enquiryChannel) {
+    case "event":
+      // No date needed: "we met at the home show" is already the when.
+      return `We met at the ${f.sourceLabel.toLowerCase()} and talked about ${about}`;
+    case "phone":
+      return `You called us about ${about}${when}`;
+    case "web":
+      return `You asked about ${about}${when}`;
+    case "unknown":
+      return `You got in touch about ${about}${when}`;
+  }
+}
+
+/** "back in June last year" · "back in June". */
+function enquiryWhen(enquiredAt: Date, now: Date): string {
+  const suffix = enquiredAt.getFullYear() < now.getFullYear() ? " last year" : "";
+  return `back in ${monthName(enquiredAt)}${suffix}`;
 }

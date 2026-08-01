@@ -237,13 +237,48 @@ export interface NeighbourCampaignFacts {
   now: Date;
 }
 
+/**
+ * How an enquiry reached us. The opener depends on it: you cannot say "we met"
+ * to someone who filled in a form, and "you asked about" is wrong for someone
+ * whose hand you shook at a stand.
+ */
+export type EnquiryChannel = "web" | "event" | "phone" | "unknown";
+
+export interface NeverQuotedFacts {
+  kind: "never_quoted";
+  dealId: string;
+  dealName: string;
+  contact: ContactFacts;
+  /**
+   * When they got in touch. Frequently null — plenty of records carry the
+   * channel but never captured a date ("ENQUIRED: Home show"), and a draft
+   * must not invent one.
+   */
+  enquiredAt: Date | null;
+  enquiryChannel: EnquiryChannel;
+  /** "Home show", "Landing Page" — the source as recorded, for the reasons. */
+  sourceLabel: string;
+  /**
+   * What they asked about, if it was captured. On a never-quoted record the
+   * work-type tag can only have come from the enquiry itself — there is no
+   * job it could describe instead.
+   */
+  enquiredAbout: string | null;
+  /** Days the record has sat without anybody working it. */
+  unworkedDays: number | null;
+  /** Guard: the moment a quote exists this is not a never-quoted lead. */
+  everQuoted: boolean;
+  now: Date;
+}
+
 export type TriggerFacts =
   | ElevenMonthFacts
   | SeasonalFacts
   | RevivalFacts
   | SequenceFacts
   | SpeedToLeadFacts
-  | NeighbourCampaignFacts;
+  | NeighbourCampaignFacts
+  | NeverQuotedFacts;
 
 /**
  * What firing a trigger produces.

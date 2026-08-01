@@ -367,7 +367,7 @@ describe("stale strings map to real timestamps", () => {
 
   it("puts the staleWarn deals past their pipeline's threshold", () => {
     const warned = DEAL_FIXTURES.filter((d) => d.staleWarn);
-    expect(warned.map((d) => d.id)).toEqual(["r4", "c3", "b4", "p5", "n2"]);
+    expect(warned.map((d) => d.id)).toEqual(["r4", "r11", "c3", "b4", "p5", "n2"]);
     for (const d of warned) {
       // c3 is 16 days silent — flagged on the card, but Commercial's 45-day
       // cycle means it is not yet *neglected*. The two signals are different.
@@ -390,7 +390,7 @@ describe("stale strings map to real timestamps", () => {
     expect(anchorDays("not yet contacted")).toBeNull();
   });
 
-  it("neglects exactly b4, r4, p5 and n2 across the whole fixture set", () => {
+  it("neglects exactly b4, r4, r11, p5 and n2 across the whole fixture set", () => {
     // Every other deal is either inside its threshold or has someone booked to
     // call it. The prototype hard-codes c3 into this list; Commercial's 45-day
     // cycle takes it out. n2 is the New Leads SLA breach — one day, not
@@ -403,7 +403,7 @@ describe("stale strings map to real timestamps", () => {
         d.next?.state ?? null,
       ),
     ).map((d) => d.id);
-    expect(neglected.sort()).toEqual(["b4", "n2", "p5", "r4"]);
+    expect(neglected.sort()).toEqual(["b4", "n2", "p5", "r11", "r4"]);
   });
 
   it("keeps a never-contacted lead off the list while its intro call stands", () => {
@@ -500,10 +500,20 @@ describe("formatDue", () => {
 });
 
 describe("fixture integrity", () => {
-  it("holds the 25 prototype leads plus the 5 New Leads fixtures", () => {
-    expect(DEAL_FIXTURES).toHaveLength(30);
-    expect(new Set(DEAL_FIXTURES.map((d) => d.id)).size).toBe(30);
-    expect(DEAL_FIXTURES.filter((d) => d.pipe !== "newleads")).toHaveLength(25);
+  it("holds the 25 prototype leads, 2 never-quoted and 5 New Leads fixtures", () => {
+    expect(DEAL_FIXTURES).toHaveLength(32);
+    expect(new Set(DEAL_FIXTURES.map((d) => d.id)).size).toBe(32);
+    // The 25 transcribed from the prototype, plus the two never-quoted leads
+    // added when that track landed — counted apart so a future edit to one
+    // group can't silently absorb the other.
+    expect(
+      DEAL_FIXTURES.filter(
+        (d) => d.pipe !== "newleads" && d.track !== "neverquoted",
+      ),
+    ).toHaveLength(25);
+    expect(
+      DEAL_FIXTURES.filter((d) => d.track === "neverquoted"),
+    ).toHaveLength(2);
   });
 
   it("places every lead on a stage of its own pipeline", () => {
@@ -517,7 +527,7 @@ describe("fixture integrity", () => {
   // a second, competing answer to the same question — so its deals carry no
   // track at all, not an unused one.
   const TRACK_VOCABULARY: Partial<Record<PipelineId, string[]>> = {
-    resi: ["referral", "repeat", "revival"],
+    resi: ["referral", "repeat", "revival", "neverquoted"],
   };
 
   it("draws each lead's track from its own pipeline's vocabulary", () => {

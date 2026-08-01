@@ -226,6 +226,33 @@ function factLines(facts: TriggerFacts): string[] {
       return lines;
     }
 
+    case "never_quoted": {
+      const lines = [
+        "TRIGGER: this person gave us their details and we never sent them a quote",
+        `HOW THEY REACHED US: ${facts.sourceLabel} (${facts.enquiryChannel})`,
+      ];
+      if (facts.enquiredAt) lines.push(`WHEN THEY ENQUIRED: ${monthYear(facts.enquiredAt)}`);
+      else
+        lines.push(
+          "WHEN THEY ENQUIRED: not captured — do not state or imply a date",
+        );
+      if (facts.enquiredAbout)
+        lines.push(`WHAT THEY ASKED ABOUT: ${facts.enquiredAbout} work`);
+      else
+        lines.push(
+          "WHAT THEY ASKED ABOUT: not captured — keep it general, do not name a room or a surface",
+        );
+      lines.push(
+        "THERE IS NO JOB AND NO QUOTE. Do not reference past work, a previous price, a discount, or a warranty — none exist for this person.",
+        facts.enquiryChannel === "event"
+          ? "OPENER: we met them in person at the event. Do not write 'you asked' or 'you got in touch'."
+          : "OPENER: they contacted us. Do not write 'we met'.",
+        "ACKNOWLEDGE THE GAP: say plainly that we never got back to them with a number. Do not apologise at length and do not explain why.",
+        "THE ASK: send someone to look and price it properly",
+      );
+      return lines;
+    }
+
     case "speed_to_lead":
       // An internal alert has no customer-facing draft. The `outcome`
       // discriminator keeps the runner from ever calling a drafter with it.

@@ -19,7 +19,12 @@ import { BoardColumns } from "./BoardColumns";
 import { BoardHeader } from "./BoardHeader";
 import { KpiStrip, type BoardStat } from "./KpiStrip";
 import { PipelineSelector } from "./PipelineSelector";
-import { pipelineParser, trackParser, viewParser } from "./search-params";
+import {
+  pipelineParser,
+  sourceParser,
+  trackParser,
+  viewParser,
+} from "./search-params";
 
 /**
  * The board is pipeline-generic: all four pipelines render through this one
@@ -61,8 +66,8 @@ export function BoardScreen({
   showPipelineSelector?: boolean;
 }) {
   const [pipe, setPipe] = useQueryState(pipelineParam, pipelineParser);
-  const [{ track, view }, setViewState] = useQueryStates(
-    { track: trackParser, view: viewParser },
+  const [{ track, view, source }, setViewState] = useQueryStates(
+    { track: trackParser, view: viewParser, source: sourceParser },
     { history: "replace" },
   );
 
@@ -78,13 +83,21 @@ export function BoardScreen({
   // Keyed off the same thing the header renders from, so a pipeline can never
   // show a track control that doesn't filter, or filter with no control.
   const hasTracks = pipeline.trackOptions.length > 0;
-  const visible = useMemo(
-    () =>
-      hasTracks && track !== "all"
-        ? deals.filter((d) => d.track === track)
-        : deals,
-    [deals, hasTracks, track],
+
+  // Which sources this pipeline's deals actually use. Offering the full
+  // catalogue would list two dozen channels a board has never seen; offering
+  // only what's present keeps the menu honest and short.
+  const sourceOptions = useMemo(
+    () => Array.from(new Set(deals.map((d) => d.source))).sort(),
+    [deals],
   );
+
+  const visible = useMemo(() => {
+    let out = deals;
+    if (hasTracks && track !== "all") out = out.filter((d) => d.track === track);
+    if (source !== "all") out = out.filter((d) => d.source === source);
+    return out;
+  }, [deals, hasTracks, track, source]);
 
   /** Stage-keyed view of the global `pipeline:stage` collapse map. */
   const collapsedByStage = useMemo(() => {
@@ -196,6 +209,9 @@ export function BoardScreen({
           pipeline={pipeline}
           track={track}
           onTrack={(t) => void setViewState({ track: t })}
+          source={source}
+          sourceOptions={sourceOptions}
+          onSource={(v) => void setViewState({ source: v })}
           view={view}
           onView={(v) => void setViewState({ view: v })}
           anyExpanded={anyExpanded}

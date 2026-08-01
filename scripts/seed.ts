@@ -550,7 +550,11 @@ function heroTouchpoints(): TouchpointRow[] {
       initials: "OS",
       userId: null,
       agentId: null,
-      structured: null,
+      structured: [
+        { label: "EVENT", value: "job_completed" },
+        { label: "SCOPE", value: "4 rooms, hallway, stairwell" },
+        { label: "VALUE", value: "$8,400" },
+      ],
       occurredAt: new Date(2025, 7, 21, 17, 0, 0),
     },
     {
@@ -765,6 +769,7 @@ const eventTouchpoints: TouchpointRow[] = [
     userId: null,
     agentId: null,
     structured: [
+      { label: "EVENT", value: "job_completed" },
       { label: "SCOPE", value: "Siding, trim, front door" },
       { label: "VALUE", value: "$9,250" },
       { label: "CREW", value: "Kris Jolin crew" },
@@ -1102,6 +1107,57 @@ async function main() {
     if (removed.length) {
       console.log(
         `Removed ${removed.length} touchpoint(s) the seed no longer writes: ${removed.map((r) => r.id).join(", ")}`,
+      );
+    }
+  }
+
+  // Leads created at runtime by an approved neighbour draft. They survive a
+  // plain upsert, and because the trigger treats a matching address as already
+  // known, yesterday's approvals silently suppress today's canvassing — the
+  // neighbour trigger just stops firing and looks broken. Same convergence
+  // rule as the runtime touchpoints; `--keep-activity` preserves them.
+  if (!KEEP_ACTIVITY) {
+    const runtimeLeads = await db
+      .select({ id: schema.deals.id })
+      .from(schema.deals)
+      .where(sql`${schema.deals.id} like 'nl-%'`);
+    const runtimeIds = runtimeLeads.map((d) => d.id);
+    if (runtimeIds.length) {
+      // Order matters: release the canvass targets before the deals they
+      // point at disappear, or the FK blocks the delete.
+      await db
+        .update(schema.canvassTargets)
+        .set({ dealId: null, status: "pending" })
+        .where(inArray(schema.canvassTargets.dealId, runtimeIds));
+      await db
+        .update(schema.deals)
+        .set({ sourcedFromDealId: null })
+        .where(inArray(schema.deals.sourcedFromDealId, runtimeIds));
+      await db
+        .delete(schema.touchpoints)
+        .where(inArray(schema.touchpoints.dealId, runtimeIds));
+      await db
+        .delete(schema.approvals)
+        .where(inArray(schema.approvals.dealId, runtimeIds));
+      await db
+        .delete(schema.auditEvents)
+        .where(inArray(schema.auditEvents.entityId, runtimeIds));
+      await db.delete(schema.deals).where(inArray(schema.deals.id, runtimeIds));
+      console.log(
+        `Cleared ${runtimeIds.length} runtime lead(s) so the neighbour campaign can run again.`,
+      );
+    }
+
+    // Approvals the triggers produced since the last seed. The three fixture
+    // rows are re-inserted below; anything else is residue that shows as
+    // `duplicate` and suppresses the trigger that made it.
+    const strayApprovals = await db
+      .delete(schema.approvals)
+      .where(notInArray(schema.approvals.id, APPROVAL_FIXTURES.map((a) => a.id)))
+      .returning({ id: schema.approvals.id });
+    if (strayApprovals.length) {
+      console.log(
+        `Cleared ${strayApprovals.length} approval(s) generated since the last seed.`,
       );
     }
   }

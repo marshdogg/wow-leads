@@ -272,7 +272,12 @@ export async function bookDeal(input: {
     byAgent: false,
     initials: "OS",
     userId: input.actorUserId,
-    structured: null,
+    // A booking and a completion are both "something happened to the job", so
+    // they share the JOB channel — but they mean opposite things to anything
+    // reading job history. Booking an estimate for a past customer must not
+    // read as "we just finished their work". The marker is structural so
+    // consumers can discriminate without parsing the sentence.
+    structured: [{ label: "EVENT", value: "estimate_booked" }],
     occurredAt: now,
   });
 
