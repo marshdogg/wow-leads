@@ -732,11 +732,20 @@ export const DEAL_FIXTURES: DealFixture[] = [
     name: "Theo Lindqvist",
     account: "1445 Otis Pl NW",
     tags: ["DIRECT HOMEOWNER", "EXTERIOR"],
-    source: "Web Form",
+    source: "Job Site",
     owner: { initials: "RA", name: "Reese Alvarado", agent: false },
     assignedBy: "Self-sourced",
     stale: "booked 1d ago",
     osRef: "EST-40311",
+    /**
+     * The second lead off the Tunlaw job, and the one that carries a number:
+     * without a priced lead the attribution panel can only say "1 lead", which
+     * is the one thing it exists not to say. Deliberately no `NEIGHBOUR OF`
+     * metric — that claim belongs to the lead literally next door. The link
+     * means the job produced the lead, which also covers a referral from the
+     * customer or someone who saw the crew working.
+     */
+    sourcedFromDealId: "r8",
     metrics: [
       { label: "EST. VALUE", value: "$9,100" },
       { label: "WALK", value: "Aug 4" },

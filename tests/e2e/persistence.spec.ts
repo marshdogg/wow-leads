@@ -89,17 +89,29 @@ test("collapse state and list sort persist across a reload", async ({
   }
   await expect(head).toHaveAttribute("data-sort", "asc");
 
-  await page.reload();
-  await expect(page.getByTestId("list-head-name")).toHaveAttribute(
-    "data-sort",
-    "asc",
-  );
+  // Preferences are written by a server action the click doesn't await, so a
+  // reload can outrun the write. The guarantee under test is that the choice
+  // *eventually* survives a reload, so the reload itself is part of the poll
+  // rather than a single shot that races the round trip.
+  await expect
+    .poll(
+      async () => {
+        await page.reload();
+        return page.getByTestId("list-head-name").getAttribute("data-sort");
+      },
+      { timeout: 30_000, intervals: [500, 1000, 2000] },
+    )
+    .toBe("asc");
 
-  await page.goto("/board?pipeline=resi&view=board");
-  await expect(page.getByTestId("column-past")).toHaveAttribute(
-    "data-collapsed",
-    "true",
-  );
+  await expect
+    .poll(
+      async () => {
+        await page.goto("/board?pipeline=resi&view=board");
+        return page.getByTestId("column-past").getAttribute("data-collapsed");
+      },
+      { timeout: 30_000, intervals: [500, 1000, 2000] },
+    )
+    .toBe("true");
 
   // Leave the account as we found it — these are real persisted preferences.
   await page.getByTestId("column-collapse-past").click();

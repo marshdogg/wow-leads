@@ -136,16 +136,25 @@ describe("New Leads: a pipeline measured in minutes", () => {
     expect(soon.getTime()).toBe(NOW.getTime() + 8 * 60_000);
   });
 
-  it("attributes the neighbour lead to the job that produced it", () => {
+  it("attributes the neighbour leads to the job that produced them", () => {
     const sourced = DEAL_FIXTURES.filter((d) => d.sourcedFromDealId === "r8");
-    expect(sourced.map((d) => d.id)).toEqual(["n2"]);
-    // The card states the relationship in its own metric strip. The value is
-    // left blank in the fixture on purpose — the seed fills it from the linked
-    // job so the card and the link can never disagree — so this asserts the
-    // slot exists, not what the seed puts in it.
-    expect(
-      sourced[0].metrics?.some((m) => m.label === "NEIGHBOUR OF"),
-    ).toBe(true);
+    expect(sourced.map((d) => d.id).sort()).toEqual(["n2", "n5"]);
+
+    // At least one has to carry a price, or the attribution panel can only
+    // report a count — and "1 lead, no value" is the opposite of the argument
+    // that panel exists to make.
+    const priced = sourced.filter((d) =>
+      d.metrics?.some((m) => m.label === "EST. VALUE"),
+    );
+    expect(priced.length).toBeGreaterThan(0);
+
+    // The literal next-door lead states the relationship in its metric strip.
+    // The value is left blank in the fixture on purpose — the seed fills it
+    // from the linked job — so this asserts the slot, not the seed's text.
+    const nextDoor = sourced.find((d) => d.id === "n2")!;
+    expect(nextDoor.metrics?.some((m) => m.label === "NEIGHBOUR OF")).toBe(
+      true,
+    );
   });
 });
 
