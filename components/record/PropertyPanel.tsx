@@ -37,12 +37,8 @@ export function PropertyPanel({
       <SectionLabel>{RECORD_FIELDS.propertyHeading}</SectionLabel>
 
       <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: 15,
-          marginTop: 14,
-        }}
+        className="grid grid-cols-1 sm:grid-cols-2"
+        style={{ gap: 15, marginTop: 14 }}
       >
         {details.map((d) => (
           <div key={d.label}>

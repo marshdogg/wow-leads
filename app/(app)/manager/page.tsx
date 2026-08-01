@@ -69,7 +69,10 @@ export default async function ManagerPage() {
           <SourceRoi rows={sourceRoi} />
         </DashPanel>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+        <div
+          className="flex min-w-0 flex-col"
+          style={{ gap: 18 }}
+        >
           <PipelineHealth rows={health} />
           <ProspectMetrics stats={prospectMetrics} />
         </div>

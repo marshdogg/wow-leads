@@ -28,13 +28,11 @@ export function SourceRoi({ rows }: { rows: SourceRoiRow[] }) {
               key={s.label}
               style={{ display: "flex", alignItems: "center", gap: 12 }}
             >
+              {/* Narrower label on a phone so the bar keeps enough room to
+                  read as a bar — a 10px stub compares nothing. */}
               <div
-                style={{
-                  width: 132,
-                  flex: "none",
-                  fontSize: 12,
-                  color: "#98a298",
-                }}
+                className="w-[92px] sm:w-[132px]"
+                style={{ flex: "none", fontSize: 12, color: "#98a298" }}
               >
                 {s.label}
               </div>

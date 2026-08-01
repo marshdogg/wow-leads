@@ -119,7 +119,7 @@ export function RecordScreen({ view }: { view: RecordView }) {
         className="grid grid-cols-1 md:grid-cols-[1.4fr_1fr]"
         style={{ gap: 18, marginTop: 22, alignItems: "start" }}
       >
-        <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+        <div className="flex min-w-0 flex-col" style={{ gap: 18 }}>
           <ContactsPanel dealId={deal.id} contacts={contacts} />
           <PropertyPanel
             details={account.details}
@@ -128,7 +128,7 @@ export function RecordScreen({ view }: { view: RecordView }) {
           <ActivityTimeline timeline={view.timeline} />
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+        <div className="flex min-w-0 flex-col" style={{ gap: 18 }}>
           <MetaPanel rows={metaRows(view)} />
           <NextStepPanel dealId={deal.id} style={nextStepStyle(deal)} />
           <SuggestionsPanel

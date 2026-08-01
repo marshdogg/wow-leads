@@ -12,56 +12,65 @@ export function PipelineHealth({ rows }: { rows: HealthRow[] }) {
         title="Pipeline health"
         sub="Active value, win rate and deal size per rep."
       />
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: GRID,
-          fontSize: 11,
-          letterSpacing: "0.6px",
-          color: "#6f7a6f",
-          fontWeight: 600,
-          paddingBottom: 9,
-          marginTop: 14,
-          borderBottom: "1px solid #1f231e",
-        }}
-      >
-        {HEADS.map((h) => (
-          <div key={h}>{h}</div>
-        ))}
-      </div>
+      {/* A table of figures meant to be compared down the column, so the
+          columns hold at every width rather than stacking into unlabelled
+          numbers. Four short figures fit a phone. */}
+      <div className="min-w-0">
+        <div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: GRID,
+              fontSize: 11,
+              letterSpacing: "0.6px",
+              color: "#6f7a6f",
+              fontWeight: 600,
+              paddingBottom: 9,
+              marginTop: 14,
+              borderBottom: "1px solid #1f231e",
+            }}
+          >
+            {HEADS.map((h) => (
+              <div key={h}>{h}</div>
+            ))}
+          </div>
 
-      {rows.map((h) => (
-        <div
-          key={h.name}
-          style={{
-            display: "grid",
-            gridTemplateColumns: GRID,
-            alignItems: "center",
-            fontSize: 13,
-            padding: "11px 0",
-            borderBottom: "1px solid #171a16",
-          }}
-        >
-          <div>{h.name}</div>
-          <div
-            style={{
-              fontFamily: "var(--font-plex-mono), 'IBM Plex Mono', monospace",
-              color: "#e2e7e2",
-            }}
-          >
-            {h.active}
-          </div>
-          <div style={{ color: winColor(h), fontWeight: 600 }}>{h.win}</div>
-          <div
-            style={{
-              fontFamily: "var(--font-plex-mono), 'IBM Plex Mono', monospace",
-              color: "#c6cdc6",
-            }}
-          >
-            {h.size}
-          </div>
+          {rows.map((h) => (
+            <div
+              key={h.name}
+              style={{
+                display: "grid",
+                gridTemplateColumns: GRID,
+                alignItems: "center",
+                fontSize: 13,
+                padding: "11px 0",
+                borderBottom: "1px solid #171a16",
+              }}
+            >
+              <div>{h.name}</div>
+              <div
+                style={{
+                  fontFamily:
+                    "var(--font-plex-mono), 'IBM Plex Mono', monospace",
+                  color: "#e2e7e2",
+                }}
+              >
+                {h.active}
+              </div>
+              <div style={{ color: winColor(h), fontWeight: 600 }}>{h.win}</div>
+              <div
+                style={{
+                  fontFamily:
+                    "var(--font-plex-mono), 'IBM Plex Mono', monospace",
+                  color: "#c6cdc6",
+                }}
+              >
+                {h.size}
+              </div>
+            </div>
+          ))}
         </div>
-      ))}
+      </div>
     </DashPanel>
   );
 }
