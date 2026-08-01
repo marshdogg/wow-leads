@@ -93,12 +93,16 @@ export function BoardColumns({
     >
       <div
         data-testid="board-columns"
+        className="px-4 sm:px-7"
         style={{
           flex: 1,
+          minWidth: 0,
           minHeight: 460,
+          // The strip is meant to run past the viewport — it scrolls itself.
           overflowX: "auto",
           overflowY: "hidden",
-          padding: "18px 28px 24px",
+          paddingTop: 18,
+          paddingBottom: 24,
         }}
       >
         <div

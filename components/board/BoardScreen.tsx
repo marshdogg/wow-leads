@@ -154,6 +154,10 @@ export function BoardScreen({
     <div
       style={{
         flex: 1,
+        // A flex item defaults to min-width:auto and will not shrink below its
+        // content, so without this the widest row (the header controls) sets
+        // the page width and drags the whole layout sideways on a phone.
+        minWidth: 0,
         minHeight: 560,
         display: "flex",
         flexDirection: "column",

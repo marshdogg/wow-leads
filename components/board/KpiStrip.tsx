@@ -16,13 +16,15 @@ export function KpiStrip({ stats }: { stats: BoardStat[] }) {
   return (
     <div
       data-testid="kpi-strip"
+      className="px-4 sm:px-7"
       style={{
         flex: "none",
-        padding: "16px 28px 0",
+        paddingTop: 16,
         display: "flex",
         gap: 14,
-        flexWrap: "nowrap",
-        overflowX: "auto",
+        // Three 238px cards fit on one line from md up, so wrapping only ever
+        // fires on a phone — where stacking beats a sideways scroll.
+        flexWrap: "wrap",
       }}
     >
       {stats.map((k) => (

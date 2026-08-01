@@ -20,7 +20,7 @@ export function PipelineSelector({
   testIdPrefix?: string;
 }) {
   return (
-    <div style={{ flex: "none", padding: "16px 28px 0" }}>
+    <div className="px-4 sm:px-7" style={{ flex: "none", paddingTop: 16 }}>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         {pipelines.map((p) => {
           const on = p.id === selected;

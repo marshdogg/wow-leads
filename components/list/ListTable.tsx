@@ -51,11 +51,16 @@ export function ListTable({
 
   return (
     <div
+      className="px-4 sm:px-7"
       style={{
         flex: 1,
+        minWidth: 0,
         minHeight: 460,
+        // The 1080px table scrolls inside this container rather than pushing
+        // the page sideways.
         overflow: "auto",
-        padding: "18px 28px 28px",
+        paddingTop: 18,
+        paddingBottom: 28,
       }}
     >
       <div

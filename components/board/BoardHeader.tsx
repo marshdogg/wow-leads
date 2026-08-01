@@ -30,9 +30,10 @@ export function BoardHeader({
 
   return (
     <div
+      className="px-4 sm:px-7"
       style={{
         flex: "none",
-        padding: "18px 28px 0",
+        paddingTop: 18,
         display: "flex",
         alignItems: "flex-start",
         justifyContent: "space-between",
@@ -40,7 +41,7 @@ export function BoardHeader({
         flexWrap: "wrap",
       }}
     >
-      <div>
+      <div style={{ minWidth: 0 }}>
         <h1
           data-testid="board-title"
           style={{
@@ -63,6 +64,11 @@ export function BoardHeader({
           alignItems: "center",
           gap: 10,
           flex: "none",
+          // `flex: none` sizes this row to max-content, so on a phone it stays
+          // 905px wide and its own flex-wrap never fires. Capping it at the
+          // container width lets the wrap happen; above md there is room to
+          // spare, so the cap is never binding and the row is unchanged.
+          maxWidth: "100%",
           flexWrap: "wrap",
         }}
       >
@@ -73,6 +79,7 @@ export function BoardHeader({
             data-testid="track-filter"
             style={{
               display: "flex",
+              flexWrap: "wrap",
               background: "#141814",
               border: "1px solid #262b25",
               borderRadius: 10,
@@ -142,6 +149,7 @@ export function BoardHeader({
           aria-label="Board or list"
           style={{
             display: "flex",
+            flexWrap: "wrap",
             background: "#141814",
             border: "1px solid #262b25",
             borderRadius: 10,
