@@ -43,6 +43,13 @@
       "when": 1785601094780,
       "tag": "0005_swift_maelstrom",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1785610264629,
+      "tag": "0006_living_zeigeist",
+      "breakpoints": true
     }
   ]
 }

@@ -55,6 +55,44 @@ spec (`design-refs/README.md`) explicitly left open.
   They are not product UI and are omitted. The substance of the INFERRED note is
   open question #4 above.
 
+## Bulk approval changes what the guarantee means
+
+The product's central promise is that **nothing sends until a human approves
+it**, and until campaigns arrived that meant a person read every individual
+message. Bulk mode is the first place someone approves something they have not
+read in full. That is a reasonable trade for a newsletter and it should be
+stated plainly rather than implied by a mode name.
+
+What bulk actually approves is a **campaign version**: the audience rule, the
+steps, and the resolved copy for each step. Editing any of those revokes the
+approval — a hash of those fields is stored alongside `approvedAt`, and if it
+moves the campaign stops sending until someone approves again. Without that,
+"approve once" would be a hole an edit could pass through afterwards.
+
+Two shapes were rejected on the way here:
+
+- **One approval row per run.** This was the original proposal and it fails on
+  the campaign that motivated the whole feature. Review requests use an
+  exact-day audience, so new people qualify *every day* — a daily trickle of
+  one to three recipients. Per-run approval would produce the same queue volume
+  as per-message with less information in each row: a count instead of a
+  message. It would have made the post-job case worse than the default it
+  existed to improve.
+- **Campaign approvals as `approvals` rows.** Kept out deliberately, so the
+  Approvals queue continues to mean "messages awaiting review". That is what
+  makes the count on the left rail meaningful; a campaign sitting alongside
+  three drafted texts would degrade a number people rely on. Campaign approval
+  lives on the campaign row instead.
+
+Per-message remains the default. A franchise opts into bulk deliberately.
+
+**Known limit:** the hash covers the audience *rule*, not the audience *size*.
+A campaign approved when a tag matched 50 accounts keeps its approval when the
+same tag later matches 5,000, because nothing about the campaign changed. The
+policy was approved; the volume was not. A guardrail that re-asks when a run
+greatly exceeds the size at approval time would close it, at the cost of
+nagging a legitimately growing list.
+
 ## Other decisions worth knowing
 
 - **Every route stacks to one column below `md`, not just the Field view.** The

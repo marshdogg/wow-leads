@@ -961,6 +961,143 @@ const canvassTargetRows = [
 ];
 
 /**
+ * Completed jobs, reconstructed from the job history the cards already show
+ * as strings — `LAST JOB $8,400`, `COMPLETED Aug 2025`. Same facts, but as
+ * timestamps a campaign can be timed against.
+ *
+ * Priya's job is **exactly four days back** on purpose: a "4 days after the
+ * job" review campaign has to select somebody or the feature demos as an empty
+ * list. It also happens to be the most coherent record in the set — we
+ * finished her interior, she is now being asked for a referral, and she named
+ * a neighbour.
+ */
+const jobRows = [
+  {
+    id: "job-r1",
+    accountId: accountIdFor("r1"),
+    dealId: "r1",
+    completedAt: new Date(2025, 7, 21, 17, 0, 0),
+    workType: "interior",
+    scope: "4 rooms, hallway, stairwell",
+    areas: ["hallway", "stairwell"],
+    valueCents: 840_000,
+    crew: "Kris Jolin crew",
+  },
+  {
+    id: "job-r2",
+    accountId: accountIdFor("r2"),
+    dealId: "r2",
+    completedAt: daysAgo(122),
+    workType: "exterior",
+    scope: "Siding and trim",
+    areas: ["siding", "trim"],
+    valueCents: 1_210_000,
+    crew: "Granville Smith crew",
+  },
+  {
+    id: "job-r3",
+    accountId: accountIdFor("r3"),
+    dealId: "r3",
+    completedAt: daysAgo(4),
+    workType: "interior",
+    scope: "2 bedrooms and the landing",
+    areas: ["bedrooms", "landing"],
+    valueCents: 625_000,
+    crew: "Kris Jolin crew",
+  },
+  {
+    id: "job-r4",
+    accountId: accountIdFor("r4"),
+    dealId: "r4",
+    completedAt: new Date(2025, 1, 14, 17, 0, 0),
+    workType: "interior",
+    scope: "Basement and stairwell",
+    areas: ["basement", "stairwell"],
+    valueCents: 490_000,
+    crew: "Craig Merrills crew",
+  },
+  {
+    id: "job-r8",
+    accountId: accountIdFor("r8"),
+    dealId: "r8",
+    completedAt: daysAgo(2),
+    workType: "exterior",
+    scope: "Siding, trim and front door",
+    areas: ["siding", "trim", "front door"],
+    valueCents: 925_000,
+    crew: "Kris Jolin crew",
+  },
+];
+
+/**
+ * Two campaigns, so the screen has something real on it. Both start inactive —
+ * a campaign that begins sending the moment it is seeded is not a demo, it is
+ * an accident.
+ */
+const campaignRows = [
+  {
+    id: "camp-review",
+    name: "Google review request",
+    category: "RESIDENTIAL LEADS",
+    description:
+      "Asks for a review four days after the job finishes — long enough for the paint to look settled, soon enough that they still remember the crew's names.",
+    audienceKind: "job_completed_days_ago",
+    audienceParams: { days: 4 },
+    approvalMode: "per_message",
+    active: false,
+    reenrolAfterDays: 365,
+    authoredBy: "u-marshall",
+    createdAt: NOW,
+    updatedAt: NOW,
+  },
+  {
+    id: "camp-winback",
+    name: "Two-year win-back",
+    category: "RESIDENTIAL LEADS",
+    description:
+      "Customers we have not worked for in two years. The cheapest lead is one who already knows the crew.",
+    audienceKind: "no_job_in_months",
+    audienceParams: { months: 24 },
+    approvalMode: "per_message",
+    active: false,
+    reenrolAfterDays: 365,
+    authoredBy: "u-marshall",
+    createdAt: NOW,
+    updatedAt: NOW,
+  },
+];
+
+const campaignStepRows = [
+  {
+    id: "camp-review-s1",
+    campaignId: "camp-review",
+    stepNumber: 1,
+    delayDays: 0,
+    channel: "SMS",
+    templateId: null,
+    label: "Ask for the review",
+  },
+  {
+    id: "camp-review-s2",
+    campaignId: "camp-review",
+    stepNumber: 2,
+    delayDays: 5,
+    channel: "EMAIL",
+    templateId: null,
+    label: "One reminder, then stop",
+  },
+  {
+    id: "camp-winback-s1",
+    campaignId: "camp-winback",
+    stepNumber: 1,
+    delayDays: 0,
+    channel: "EMAIL",
+    templateId: null,
+    label: "Open the conversation",
+  },
+];
+
+/**
  * Shipped template rows. `order` becomes `updatedAt` — same-scope siblings are
  * separated by it, richest first, so a template naming more facts is preferred
  * whenever the record can supply them.
@@ -1233,6 +1370,31 @@ async function main() {
   // Only the shipped rows are touched. A franchise's own templates are their
   // work and are never overwritten by a re-seed.
   await db
+    .insert(schema.jobs)
+    .values(jobRows)
+    .onConflictDoUpdate({
+      target: schema.jobs.id,
+      set: overwrite(schema.jobs),
+    });
+
+  await db
+    .insert(schema.campaigns)
+    .values(campaignRows)
+    .onConflictDoUpdate({
+      // A franchise's own campaigns are theirs; only the seeded two are reset.
+      target: schema.campaigns.id,
+      set: overwrite(schema.campaigns, ["id", "createdAt"]),
+    });
+
+  await db
+    .insert(schema.campaignSteps)
+    .values(campaignStepRows)
+    .onConflictDoUpdate({
+      target: schema.campaignSteps.id,
+      set: overwrite(schema.campaignSteps),
+    });
+
+  await db
     .insert(schema.templates)
     .values(templateRows)
     .onConflictDoUpdate({
@@ -1322,6 +1484,9 @@ async function main() {
     union all select 'promos', count(*)::int from promos
     union all select 'deals', count(*)::int from deals
     union all select 'touchpoints', count(*)::int from touchpoints
+    union all select 'jobs', count(*)::int from jobs
+    union all select 'campaigns', count(*)::int from campaigns
+    union all select 'campaign_steps', count(*)::int from campaign_steps
     union all select 'templates', count(*)::int from templates
     union all select 'canvass_targets', count(*)::int from canvass_targets
     union all select 'approvals', count(*)::int from approvals

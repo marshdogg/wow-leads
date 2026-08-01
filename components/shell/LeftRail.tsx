@@ -11,6 +11,7 @@ import type { PipelineCategory, PipelineConfig } from "@/lib/types";
 const NAV = [
   { label: "Approvals", href: "/approvals" },
   { label: "Templates", href: "/templates" },
+  { label: "Campaigns", href: "/campaigns" },
   { label: "Field view", href: "/field" },
   { label: "Manager dashboard", href: "/manager" },
   { label: "Switcher", href: "/switcher" },

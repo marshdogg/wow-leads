@@ -304,6 +304,135 @@ export const deals = pgTable(
 );
 
 /* -------------------------------------------------------------------------
+   Completed jobs
+   ------------------------------------------------------------------------- */
+
+/**
+ * A completed job, as the WOW OS Funnel reports it.
+ *
+ * The piece WOW Leads has never had. Job facts on a card are display strings —
+ * `LAST JOB $8,400`, `COMPLETED Aug 2025` — which render fine and cannot
+ * answer "whose job finished four days ago". A review campaign is a moment
+ * timed off the work, so the moment has to be a timestamp.
+ *
+ * Nothing writes here yet but the seed: the Funnel does not send completions.
+ * That is why `hasJobCompletions()` exists and why the Campaigns editor says
+ * so rather than offering an audience that would silently select nobody.
+ */
+export const jobs = pgTable(
+  "jobs",
+  {
+    id: text("id").primaryKey(),
+    accountId: text("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    /** The deal it came from, when we know it. */
+    dealId: text("deal_id").references((): AnyPgColumn => deals.id),
+    completedAt: timestamp("completed_at", { withTimezone: true }).notNull(),
+    /** interior | exterior | industrial */
+    workType: text("work_type").notNull(),
+    /** "4 rooms, hallway, stairwell" */
+    scope: text("scope").notNull().default(""),
+    /** Named areas, for templates that reference them. */
+    areas: jsonb("areas").$type<string[]>().notNull().default([]),
+    /** Cents, so money is never a float. */
+    valueCents: integer("value_cents").notNull().default(0),
+    crew: text("crew"),
+  },
+  (t) => [
+    index("jobs_account_idx").on(t.accountId),
+    index("jobs_completed_idx").on(t.completedAt),
+    index("jobs_deal_idx").on(t.dealId),
+  ],
+);
+
+/* -------------------------------------------------------------------------
+   Campaigns
+   ------------------------------------------------------------------------- */
+
+/**
+ * Outreach that is not a pipeline: an audience, some steps, a schedule. See
+ * `lib/campaigns/types.ts` for why these are not boards.
+ */
+export const campaigns = pgTable("campaigns", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  /** Open string — a franchise invents "Reviews". */
+  category: text("category").notNull().default("RESIDENTIAL LEADS"),
+  description: text("description").notNull().default(""),
+  /** One of the four parameterised kinds in `AudienceKind`. */
+  audienceKind: text("audience_kind").notNull(),
+  audienceParams: jsonb("audience_params")
+    .$type<Record<string, unknown>>()
+    .notNull()
+    .default({}),
+  /** per_message | bulk. Per-message is the default; bulk is opted into. */
+  approvalMode: text("approval_mode").notNull().default("per_message"),
+  active: boolean("active").notNull().default(false),
+  /** Null means once-only. */
+  reenrolAfterDays: integer("reenrol_after_days"),
+  authoredBy: text("authored_by").references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export const campaignSteps = pgTable(
+  "campaign_steps",
+  {
+    id: text("id").primaryKey(),
+    campaignId: text("campaign_id")
+      .notNull()
+      .references(() => campaigns.id, { onDelete: "cascade" }),
+    stepNumber: integer("step_number").notNull(),
+    /** Days after the previous step, or after enrolment for step one. */
+    delayDays: integer("delay_days").notNull().default(0),
+    channel: text("channel").notNull().default("EMAIL"),
+    /**
+     * Pinned template, or null to resolve by scope at send time. Null is the
+     * better default — the copy then follows the Templates screen rather than
+     * freezing at the moment the campaign was written.
+     */
+    templateId: text("template_id").references(() => templates.id, {
+      onDelete: "set null",
+    }),
+    label: text("label").notNull().default(""),
+  },
+  (t) => [
+    index("campaign_steps_campaign_idx").on(t.campaignId),
+    uniqueIndex("campaign_steps_order_idx").on(t.campaignId, t.stepNumber),
+  ],
+);
+
+export const campaignEnrolments = pgTable(
+  "campaign_enrolments",
+  {
+    id: text("id").primaryKey(),
+    campaignId: text("campaign_id")
+      .notNull()
+      .references(() => campaigns.id, { onDelete: "cascade" }),
+    dealId: text("deal_id")
+      .notNull()
+      .references(() => deals.id, { onDelete: "cascade" }),
+    enrolledAt: timestamp("enrolled_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    currentStep: integer("current_step").notNull().default(1),
+    /** active | completed | exited */
+    state: text("state").notNull().default("active"),
+    exitReason: text("exit_reason"),
+  },
+  (t) => [
+    index("campaign_enrolments_campaign_idx").on(t.campaignId),
+    index("campaign_enrolments_deal_idx").on(t.dealId),
+    index("campaign_enrolments_state_idx").on(t.state),
+  ],
+);
+
+/* -------------------------------------------------------------------------
    Message templates
    ------------------------------------------------------------------------- */
 
