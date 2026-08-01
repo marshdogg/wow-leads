@@ -695,6 +695,54 @@ describe("shipped message templates", () => {
     );
   });
 
+  it("keeps the account tag and the job's work type as separate tokens", () => {
+    // They genuinely disagree: r8's account is tagged INTERIOR while the job
+    // we finished was exterior. A template that reaches for the wrong one is
+    // wrong about a real house, so no template may use both.
+    for (const t of ALL) {
+      const tokens = tokensIn(t);
+      const both =
+        tokens.includes("account.workType") && tokens.includes("job.workType");
+      expect({ id: t.id, both }).toEqual({ id: t.id, both: false });
+    }
+  });
+
+  it("uses only the account tag where there is no completed job", () => {
+    // Sequence prospects and never-quoted contacts have never had a job, so
+    // `job.workType` is null for them and a template naming it would be
+    // permanently ineligible rather than merely plainer.
+    const jobless = ALL.filter(
+      (t) => t.triggerType === "sequence" || t.triggerType === "never_quoted",
+    );
+    expect(jobless.length).toBeGreaterThan(0);
+    for (const t of jobless) {
+      expect(tokensIn(t)).not.toContain("job.workType");
+    }
+  });
+
+  it("pairs every work-type variant with plain copy to fall through to", () => {
+    // `account.workType` is nullable with no default — that is what lets a
+    // template say less rather than render a gap. It only works if each
+    // family has a sibling that names no trade at all.
+    const families = new Set(
+      ALL.filter((t) => tokensIn(t).includes("account.workType")).map(
+        (t) => `${t.triggerType}:${t.stageId}`,
+      ),
+    );
+    for (const family of families) {
+      const siblings = ALL.filter(
+        (t) => `${t.triggerType}:${t.stageId}` === family,
+      );
+      const plain = siblings.filter(
+        (t) => !tokensIn(t).includes("account.workType"),
+      );
+      expect({ family, hasPlainSibling: plain.length > 0 }).toEqual({
+        family,
+        hasPlainSibling: true,
+      });
+    }
+  });
+
   it("never names the recipient in a neighbour campaign", () => {
     // A canvassed address has no contact on file. Inventing a name is worse
     // than an unaddressed opener, and these go to real front doors.

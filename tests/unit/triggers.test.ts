@@ -89,11 +89,8 @@ function renderTemplate(request: {
 }
 import { DEFAULT_SENDER } from "@/lib/agents/types";
 import {
-  completionEvent,
   dayInSequence,
   isAbsent,
-  isCompletionRecord,
-  jobScopeAreas,
   parseInitialType,
   parseMonthDay,
   parseMonthYear,
@@ -102,6 +99,7 @@ import {
   replyNoteFrom,
   shortAccountName,
   splitAreas,
+  workTypeTag,
 } from "@/lib/triggers/record-parse";
 import { CHIP_SEQUENCE, CHIP_TRIGGER } from "@/lib/triggers/types";
 import type {
@@ -673,61 +671,33 @@ describe("record parsing", () => {
     }
   });
 
-  it("takes the painted areas off the completion record and drops bare counts", () => {
-    const job = {
-      body: "Interior repaint completed — 4 rooms, hallway, stairwell · $8,400",
-      structured: null,
-    } as Parameters<typeof jobScopeAreas>[0];
-    expect(jobScopeAreas(job)).toEqual(["hallway", "stairwell"]);
-  });
-
-  it("prefers a structured scope field over the body text", () => {
-    const job = {
-      body: "Interior repaint completed — 4 rooms · $8,400",
-      structured: [{ label: "ROOMS", value: "kitchen, den" }],
-    } as Parameters<typeof jobScopeAreas>[0];
-    expect(jobScopeAreas(job)).toEqual(["kitchen", "den"]);
-  });
-
   it("yields no areas rather than junk when the record has none", () => {
-    expect(jobScopeAreas(undefined)).toEqual([]);
     expect(splitAreas("Not captured yet")).toEqual([]);
     expect(splitAreas(undefined)).toEqual([]);
   });
 
-  it("tells a finished job from a booked estimate on the same channel", () => {
-    // Regression, and a severe one: `bookDeal` writes an estimate booking on
-    // the JOB channel too. Taking the newest JOB row as the completion made
-    // booking an estimate for a past customer reset their warranty clock to
-    // zero, silently switching off the 11-month trigger.
-    const completion = {
-      channel: "JOB",
-      body: "Interior repaint completed — 4 rooms, hallway, stairwell · $8,400",
-      structured: [{ label: "EVENT", value: "job_completed" }],
-      occurredAt: new Date(2025, 7, 22),
-    } as Parameters<typeof completionEvent>[0][number];
-    const booking = {
-      channel: "JOB",
-      body: "Estimate scheduled — Thu Aug 6 at 10:00 AM with Kris Jolin · EST-40218",
-      structured: [{ label: "EVENT", value: "estimate_booked" }],
-      occurredAt: new Date(2026, 7, 1),
-    } as Parameters<typeof completionEvent>[0][number];
+  it("reads a work type off the tags, and null when none is tagged", () => {
+    expect(workTypeTag(["INTERIOR", "DIRECT HOMEOWNER"])).toBe("interior");
+    expect(workTypeTag(["EXTERIOR"])).toBe("exterior");
+    expect(workTypeTag(["Industrial"])).toBe("industrial");
+    // The contract A1's `account.workType` token depends on. A default here
+    // would make the token unrejectable by `factsSatisfy`, so a template that
+    // names no trade could never be the one that resolves — and an untagged
+    // account would get copy asserting a trade nobody recorded.
+    expect(workTypeTag(["DIRECT HOMEOWNER", "REPEAT"])).toBeNull();
+    expect(workTypeTag([])).toBeNull();
+  });
 
-    expect(isCompletionRecord(completion)).toBe(true);
-    expect(isCompletionRecord(booking)).toBe(false);
-
-    // The marker wins over the prose when both are present…
-    expect(
-      isCompletionRecord({ ...booking, body: "Job completed on site" }),
-    ).toBe(false);
-    // …and the prose still decides for rows written before the marker existed.
-    expect(
-      isCompletionRecord({ ...completion, structured: null }),
-    ).toBe(true);
-    expect(isCompletionRecord({ ...booking, structured: null })).toBe(false);
-    // Newest first would pick the booking; it must pick the completion.
-    expect(completionEvent([completion, booking])).toBe(completion);
-    expect(completionEvent([booking])).toBeUndefined();
+  it("splits an account's free-text scope detail and drops bare counts", () => {
+    expect(splitAreas("4 rooms, hallway, stairwell")).toEqual([
+      "hallway",
+      "stairwell",
+    ]);
+    expect(splitAreas("siding, trim and front door")).toEqual([
+      "siding",
+      "trim",
+      "front door",
+    ]);
   });
 
   it("reads a pronoun only from what a rep wrote down", () => {

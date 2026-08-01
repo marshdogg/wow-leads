@@ -10,12 +10,15 @@ export default defineConfig({
   globalSetup: "./tests/e2e/global-setup.ts",
   fullyParallel: false,
   workers: 1,
-  // Never locally: against loopback a failure means something, and a retry
-  // would hide it. Once when PLAYWRIGHT_BASE_URL points at the deployed app,
-  // where a dropped navigation (net::ERR_ABORTED) is the internet rather than
-  // the product — retrying is what a person would do, and a test that still
-  // fails twice is a real failure.
-  retries: process.env.PLAYWRIGHT_BASE_URL ? 1 : 0,
+  // Never against loopback: there a failure means something and a retry would
+  // hide it. Once against a deployed target, where a dropped navigation
+  // (net::ERR_ABORTED) is the internet rather than the product — retrying is
+  // what a person would do, and a test that fails twice is a real failure.
+  //
+  // Keyed on the target rather than on the variable being set: pointing
+  // PLAYWRIGHT_BASE_URL at localhost was still switching retries on, which is
+  // the opposite of what this comment claimed.
+  retries: /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])/.test(baseURL) ? 0 : 1,
   timeout: 90_000,
   // Observed Neon latency on this project swings from ~17s for the whole
   // suite to several minutes for the same run. The assertions are right; the

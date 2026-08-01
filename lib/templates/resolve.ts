@@ -54,6 +54,13 @@ export const TEMPLATE_VARIABLES: TemplateVariable[] = [
     source: "The address of the job, for neighbour campaigns.",
   },
   {
+    token: "account.workType",
+    label: "Account work type",
+    example: "exterior",
+    source:
+      "The account's work-type tag. Describes the account, not any particular job — use job.workType for work we actually did. Null when the account carries no work-type tag.",
+  },
+  {
     token: "promo.discount",
     label: "Promo discount",
     example: "15%",

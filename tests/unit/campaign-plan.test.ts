@@ -9,6 +9,7 @@ import {
   approvableContent,
   campaignContentHash,
   campaignGate,
+  pinnedCopyGate,
   volumeGate,
   VOLUME_JUMP_FACTOR,
 } from "@/lib/campaigns/approval";
@@ -27,16 +28,30 @@ import type {
 
 const NOW = new Date(2026, 7, 1); // 1 August 2026
 
-function step(n: number, delayDays: number): CampaignStep {
+/**
+ * `templateId` defaults to null, which is the shipped default and correct for
+ * per-message campaigns. Bulk campaigns must pin every step — see
+ * `pinnedCopyGate` — so the bulk fixtures below pass one explicitly.
+ */
+function step(
+  n: number,
+  delayDays: number,
+  templateId: string | null = null,
+): CampaignStep {
   return {
     id: `st-${n}`,
     campaignId: "cmp-review",
     stepNumber: n,
     delayDays,
     channel: "SMS",
-    templateId: null,
+    templateId,
     label: `Step ${n}`,
   };
+}
+
+/** A step pinned to copy, as bulk requires. */
+function pinnedStep(n: number, delayDays: number): CampaignStep {
+  return step(n, delayDays, `tpl-review-${n}`);
 }
 
 function campaign(overrides: Partial<Campaign> = {}): Campaign {
@@ -322,11 +337,13 @@ describe("bulk approval gate", () => {
     [1, "Hi Delia — how did we do? A quick Google review helps a lot."],
     [2, "Hi Delia — one last nudge on that review if you have a minute."],
   ]);
-  const unapproved = campaign({ approvalMode: "bulk" });
+  const pinnedSteps = [pinnedStep(1, 0), pinnedStep(2, 3)];
+  const unapproved = campaign({ approvalMode: "bulk", steps: pinnedSteps });
   const content = approvableContent(unapproved, bodies);
   const approvedHash = campaignContentHash(content);
   const bulk = campaign({
     approvalMode: "bulk",
+    steps: pinnedSteps,
     approvedAt: new Date(2026, 6, 30),
     approvedBy: "u-marshall",
     approvedHash,
@@ -365,12 +382,18 @@ describe("bulk approval gate", () => {
   });
 
   it("revokes approval when a step's timing or channel changes", () => {
+    // Pinned, so the refusal is the hash moving rather than the pin check —
+    // otherwise this would pass without the timing ever being compared.
     for (const steps of [
-      [step(1, 0), step(2, 30)],
-      [{ ...step(2, 3), channel: "EMAIL" }, step(1, 0)],
+      [pinnedStep(1, 0), pinnedStep(2, 30)],
+      [{ ...pinnedStep(2, 3), channel: "EMAIL" }, pinnedStep(1, 0)],
     ]) {
       const changed = approvableContent({ ...bulk, steps }, bodies);
-      expect(campaignGate(bulk, changed).allowed).toBe(false);
+      const gate = campaignGate({ ...bulk, steps }, changed);
+      expect(gate.allowed).toBe(false);
+      if (!gate.allowed) {
+        expect(gate.reason).toContain("changed since it was approved");
+      }
     }
   });
 
@@ -383,7 +406,10 @@ describe("bulk approval gate", () => {
   });
 
   it("hashes step order stably, so reordering the array is not an edit", () => {
-    const reversed = approvableContent({ ...bulk, steps: [step(2, 3), step(1, 0)] }, bodies);
+    const reversed = approvableContent(
+      { ...bulk, steps: [pinnedStep(2, 3), pinnedStep(1, 0)] },
+      bodies,
+    );
     expect(campaignContentHash(reversed)).toBe(approvedHash);
   });
 
@@ -397,6 +423,96 @@ describe("bulk approval gate", () => {
       expect(never.needsApproval).toBe(true);
       expect(stale.needsApproval).toBe(true);
     }
+  });
+});
+
+/* -------------------------------------------------------------------------
+   Bulk needs something specific to have approved
+   ------------------------------------------------------------------------- */
+
+describe("bulk requires every step to pin a template", () => {
+  const bodies = new Map([
+    [1, "Hi Delia — how did we do? A quick Google review helps a lot."],
+    [2, "Hi Delia — one last nudge on that review if you have a minute."],
+  ]);
+
+  /** Bulk, pinned, approved over exactly this copy — the legitimate case. */
+  function approvedBulk(steps: CampaignStep[]): Campaign {
+    const base = campaign({ approvalMode: "bulk", steps });
+    return {
+      ...base,
+      approvedAt: new Date(2026, 6, 30),
+      approvedBy: "u-marshall",
+      approvedHash: campaignContentHash(approvableContent(base, bodies)),
+    };
+  }
+
+  it("refuses a bulk campaign with an unpinned step, approved or not", () => {
+    // The hole this closes: `approvableContent` fills an unpinned step's body
+    // with "", and the hash of "" is perfectly stable. An approval computed
+    // over nothing kept matching forever, so the gate opened on copy that
+    // followed the Templates screen and that nobody had read.
+    const steps = [pinnedStep(1, 0), step(2, 3)];
+    const campaigns = [
+      campaign({ approvalMode: "bulk", steps }),
+      approvedBulk(steps),
+    ];
+    for (const c of campaigns) {
+      const gate = campaignGate(c, approvableContent(c, bodies));
+      expect(gate.allowed).toBe(false);
+      if (!gate.allowed) {
+        expect(gate.reason).toContain("Step 2 pin");
+        // Approving is not the fix — the campaign has to be edited first.
+        expect(gate.needsApproval).toBe(false);
+      }
+    }
+  });
+
+  it("names every unpinned step, not just the first", () => {
+    const c = campaign({
+      approvalMode: "bulk",
+      steps: [step(1, 0), step(2, 3), pinnedStep(3, 7)],
+    });
+    const gate = pinnedCopyGate(c, approvableContent(c, bodies));
+    expect(gate.allowed).toBe(false);
+    if (!gate.allowed) expect(gate.reason).toContain("Steps 1 and 2");
+  });
+
+  it("refuses a step pinned to a template that no longer resolves", () => {
+    // Deletion *after* approval already moves the hash. This is the case the
+    // hash cannot see: the template was already missing when it was approved,
+    // so both sides agree on the empty string.
+    const steps = [pinnedStep(1, 0), pinnedStep(2, 3)];
+    const missing = new Map([[1, bodies.get(1)!], [2, ""]]);
+    const c = campaign({ approvalMode: "bulk", steps });
+    const approved: Campaign = {
+      ...c,
+      approvedAt: new Date(2026, 6, 30),
+      approvedBy: "u-marshall",
+      approvedHash: campaignContentHash(approvableContent(c, missing)),
+    };
+    const gate = campaignGate(approved, approvableContent(approved, missing));
+    expect(gate.allowed).toBe(false);
+    if (!gate.allowed) expect(gate.reason).toContain("no longer exists");
+  });
+
+  it("leaves per-message campaigns alone — null is the right default there", () => {
+    // Every send is read individually, so following the Templates screen is
+    // the point rather than a hole.
+    const c = campaign({ steps: [step(1, 0), step(2, 3)] });
+    expect(pinnedCopyGate(c, approvableContent(c, bodies))).toEqual({
+      allowed: true,
+    });
+    expect(campaignGate(c, approvableContent(c, bodies))).toEqual({
+      allowed: true,
+    });
+  });
+
+  it("lets a fully pinned, approved bulk campaign through", () => {
+    const c = approvedBulk([pinnedStep(1, 0), pinnedStep(2, 3)]);
+    expect(campaignGate(c, approvableContent(c, bodies))).toEqual({
+      allowed: true,
+    });
   });
 });
 

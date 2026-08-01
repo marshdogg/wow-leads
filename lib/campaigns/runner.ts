@@ -36,7 +36,11 @@ import type { Campaign, CampaignEnrolment, CampaignStep } from "./types";
  * Three gates stand in front of any send, in this order:
  *
  *   1. **Approval.** A bulk campaign that nobody approved — or that was
- *      approved and then edited — sends nothing. See `approval.ts`.
+ *      approved and then edited, or that leaves a step's copy unpinned and so
+ *      has nothing specific to have approved — sends nothing. See
+ *      `approval.ts`. The editor refuses the same shapes; this refuses them
+ *      again, because the editor can be bypassed and a bypass here means
+ *      unreviewed messages reaching customers.
  *   2. **Volume.** A run vastly larger than the last one pauses and asks,
  *      because audience size is the one thing bulk approval never reviewed.
  *   3. **Template eligibility.** A step whose copy needs a fact the record
@@ -177,9 +181,21 @@ async function runOne(
     return summary;
   }
 
+  /* ---- how many messages this run would actually put out ---------------- */
+  // Advances are not the whole story. A step one with `delayDays: 0` sends on
+  // the day somebody enrols, so an `enrol` action can be a send too — and for
+  // a post-job review campaign, where everyone is on step one the day they
+  // qualify, it is the *only* kind of send there ever is. Counting advances
+  // alone left both gates below looking at zero on exactly that campaign:
+  // the approval gate was skipped and the volume guard could never trip.
+  const advancing = plan.actions.filter((a) => a.type === "advance").length;
+  const immediateEnrolments = plan.actions.filter(
+    (a) => a.type === "enrol" && a.sendsImmediately,
+  ).length;
+  const sendCount = advancing + immediateEnrolments;
+
   /* ---- gate one: is this campaign allowed to send at all? -------------- */
-  const sendingSteps = plan.actions.filter((a) => a.type === "advance");
-  if (sendingSteps.length > 0) {
+  if (sendCount > 0) {
     const gate = await approvalGateFor(campaign, ctx);
     if (!gate.allowed) {
       summary.blocked = gate.reason;
@@ -189,7 +205,7 @@ async function runOne(
 
   /* ---- gate two: is this run suspiciously larger than the last? -------- */
   const volume = volumeGate({
-    recipientCount: sendingSteps.length,
+    recipientCount: sendCount,
     lastRunCount: campaign.lastRunCount,
   });
   if (!volume.allowed) {
@@ -271,7 +287,9 @@ async function runOne(
 
   // Only after a run that actually sent. Recording zero on a quiet morning
   // would reset the baseline and make the next real run look like a jump.
-  const runSize = sendingSteps.length + immediate;
+  // This is what happened, not what was planned — a step that resolved no
+  // template did not contact anybody and must not inflate the baseline.
+  const runSize = advancing + immediate;
   if (!ctx.dryRun && runSize > 0) {
     await recordRunCount(campaign.id, runSize);
   }
@@ -450,7 +468,15 @@ function campaignTemplateFacts(
   };
 }
 
-/** Whether a bulk campaign may send, with its copy resolved for the hash. */
+/**
+ * Whether a bulk campaign may send, with its copy resolved for the hash.
+ *
+ * An empty body means the step pins a template that did not resolve, and
+ * `campaignGate` refuses on it rather than hashing it. That mattered: an
+ * unpinned step and a step pointing at a deleted template both landed here as
+ * `""`, and the hash of an empty string is a perfectly stable hash — the
+ * approval kept matching, so the gate opened on copy nobody had read.
+ */
 async function approvalGateFor(campaign: Campaign, ctx: RunContext) {
   const bodies = new Map<number, string>();
   for (const step of campaign.steps) {

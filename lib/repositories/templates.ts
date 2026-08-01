@@ -428,7 +428,7 @@ export async function getTemplatePreviewContextFor(
     // Strictly off the completion record. Deriving it from the card's tag
     // would make "the {{job.workType}} work we did for you" eligible for a
     // lead who has never had a job — the precise sentence this feature exists
-    // to prevent. What they *enquired* about is `enquiry.subject`.
+    // to prevent. What the account is tagged as is `account.workType`.
     const workType = job?.workType ?? null;
     const areas = job?.areas ?? [];
     const completedAt = job?.completedAt ?? null;
@@ -461,6 +461,19 @@ export async function getTemplatePreviewContextFor(
         "contact.firstName": firstName(primary?.name),
         "sender.firstName": firstName(sender.name),
         "sender.company": COMPANY,
+
+        /*
+         * The account's tag, deliberately with **no default**. A token that
+         * can never be null defeats fact-eligibility — the mechanism that
+         * lets a template choose to say less rather than render a gap. An
+         * untagged account and an INTERIOR one must be distinguishable, so
+         * the generic word ("painting") belongs in template copy as literal
+         * text, in a variant the resolver falls through to.
+         *
+         * Distinct from `job.workType`, and they genuinely disagree: r8 is
+         * tagged INTERIOR while its completed job was exterior.
+         */
+        "account.workType": tagWorkType(deal.tags),
 
         "job.scope": workType ? `the ${workType} work` : null,
         "job.workType": workType,
@@ -507,7 +520,7 @@ export async function getTemplatePreviewContextFor(
         // false promise on a stranger's doorstep.
         "crew.until": crewUntil(accountById.get(deal.accountId ?? "")),
 
-        "enquiry.subject": tagWorkType(deal.tags),
+  
         "enquiry.month": enquiredAt ? enquiryWhen(enquiredAt, now) : null,
         "enquiry.channel": enquiryChannel(deal.source, enquired),
       },

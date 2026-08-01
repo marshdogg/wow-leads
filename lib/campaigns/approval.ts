@@ -111,6 +111,74 @@ function fnv1a(input: string): string {
 }
 
 /**
+ * Bulk requires every step to pin a template.
+ *
+ * Two defaults were set separately and contradict each other. A campaign step
+ * leaves `templateId` null so its copy follows the Templates screen, and bulk
+ * approval hashes the resolved copy of each step. A step with no pinned
+ * template has no copy to hash — `approvableContent` fills it with `""`, and
+ * an approval computed over an empty string is a tick over nothing. It would
+ * then keep matching however the Templates screen changed afterwards, which
+ * is a hole in precisely the guarantee bulk mode trades against.
+ *
+ * The same check catches a pinned template that no longer resolves — deleted,
+ * or pointing at an id that was never there. The hash alone covers deletion
+ * *after* approval (the body changes, so the hash moves) but not a step that
+ * was already broken when somebody approved it.
+ *
+ * This is deliberately inside `campaignGate` rather than beside it. A2 owns
+ * the runner, A7 owns the editor and the approve action; a gate each of them
+ * has to remember to call separately is a gate that eventually one of them
+ * doesn't. Null stays the right default for per-message campaigns, where a
+ * human reads every send and following the Templates screen is the point.
+ */
+export function pinnedCopyGate(
+  campaign: Campaign,
+  content: ApprovableContent,
+): CampaignGate {
+  if (campaign.approvalMode === "per_message") return { allowed: true };
+
+  const unpinned = campaign.steps
+    .filter((s) => !s.templateId)
+    .map((s) => s.stepNumber);
+  if (unpinned.length > 0) {
+    return {
+      allowed: false,
+      // Not something approving fixes — the campaign has to be edited first,
+      // so pointing a reviewer at the approve button would waste their time.
+      needsApproval: false,
+      reason: `${stepList(unpinned)} ${verb(unpinned)} no template, so there is no fixed copy to approve. Bulk approval means a human approved this specific message; pin a template on every step or switch the campaign to per-message review.`,
+    };
+  }
+
+  const unresolved = content.steps
+    .filter((s) => s.body.trim().length === 0)
+    .map((s) => s.stepNumber);
+  if (unresolved.length > 0) {
+    return {
+      allowed: false,
+      needsApproval: false,
+      reason: `${stepList(unresolved)} ${verb(unresolved)} a template that no longer exists, so what would send is unknown. Repoint ${unresolved.length === 1 ? "the step" : "those steps"} before approving.`,
+    };
+  }
+
+  return { allowed: true };
+}
+
+/** "Step 2" · "Steps 2 and 3" · "Steps 1, 2 and 4" — for a human to read. */
+function stepList(numbers: number[]): string {
+  const labels = numbers.map((n) => String(n));
+  if (labels.length === 1) return `Step ${labels[0]}`;
+  const last = labels[labels.length - 1];
+  return `Steps ${labels.slice(0, -1).join(", ")} and ${last}`;
+}
+
+/** Agrees with `stepList`. One step pins; several steps pin. */
+function verb(numbers: number[]): string {
+  return numbers.length === 1 ? "pins" : "pin";
+}
+
+/**
  * Whether this campaign may send right now.
  *
  * `needsApproval` distinguishes "nobody has approved this yet" from "somebody
@@ -122,6 +190,10 @@ export function campaignGate(
   content: ApprovableContent,
 ): CampaignGate {
   if (campaign.approvalMode === "per_message") return { allowed: true };
+
+  // Before anything is compared: is there copy here to have approved?
+  const pinned = pinnedCopyGate(campaign, content);
+  if (!pinned.allowed) return pinned;
 
   if (!campaign.approvedAt || !campaign.approvedHash) {
     return {

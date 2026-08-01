@@ -171,11 +171,14 @@ export const TEMPLATE_FIXTURES: TemplateFixture[] = [
   },
 
   /* ---- Biz Dev sequence -------------------------------------------------
-     No work type in this copy. `job.workType` is strictly job-derived and a
-     cold prospect has no completed job, so naming it would make every
-     sequence template permanently ineligible. The registry has no token for
-     "the work type on this account" — see the note in the report; with one
-     these read "one-day exterior turnarounds" again.
+     Work type comes from `{{account.workType}}`, never `{{job.workType}}` — a
+     cold prospect has no completed job, so the job token is correctly null
+     and any template naming it would be permanently ineligible.
+
+     The account token is nullable too, with no default, so the `-base`
+     variants below carry no work type and are what an untagged account falls
+     through to. That pairing is the mechanism: the specific copy when we know
+     the trade, the plain copy when we do not, rather than a template hedging.
 
      Step number isn't a scope dimension, but the Biz Dev stages carry the
      same distinction: `initial` is the cold intro, `followup` is everything
@@ -191,7 +194,7 @@ export const TEMPLATE_FIXTURES: TemplateFixture[] = [
     stageId: "initial",
     track: null,
     subject: "Ten minutes on your repaint scope",
-    body: `{{prospect.firstName}} — {{sender.firstName}} with {{sender.company}}. We finished work on {{reference.proof}}, one-day turnarounds on occupied buildings. If {{prospect.company}} has repaint scope coming, I would like ten minutes to show you how we sequence around trades.`,
+    body: `{{prospect.firstName}} — {{sender.firstName}} with {{sender.company}}. We finished {{account.workType}} work on {{reference.proof}}, one-day turnarounds on occupied buildings. If {{prospect.company}} has repaint scope coming, I would like ten minutes to show you how we sequence around trades.`,
     active: true,
     // Shipped copy is send-as-written. Turning adaptation on is a decision
     // a franchise makes about their own words, not one we make for them.
@@ -225,7 +228,7 @@ export const TEMPLATE_FIXTURES: TemplateFixture[] = [
     stageId: "followup",
     track: null,
     subject: "Following up",
-    body: `{{prospect.firstName}} — {{sender.firstName}} again. Following up on my earlier note. We have active work on {{reference.proof}} if you want a reference before we talk. Still worth ten minutes on your upcoming repaint scope? I can work around your trade schedule.`,
+    body: `{{prospect.firstName}} — {{sender.firstName}} again. Following up on my earlier note. We have active {{account.workType}} work on {{reference.proof}} if you want a reference before we talk. Still worth ten minutes on your upcoming repaint scope? I can work around your trade schedule.`,
     active: true,
     // Shipped copy is send-as-written. Turning adaptation on is a decision
     // a franchise makes about their own words, not one we make for them.
@@ -325,7 +328,7 @@ export const TEMPLATE_FIXTURES: TemplateFixture[] = [
     stageId: null,
     track: null,
     subject: null,
-    body: `Hi {{contact.firstName}} — ${SENDER}. We met at {{enquiry.channel}} and talked about getting your place painted, and I do not think we ever got you a proper number. If it is still on your list I can have someone take a look and price it properly this time.`,
+    body: `Hi {{contact.firstName}} — ${SENDER}. We met at {{enquiry.channel}} and talked about {{account.workType}} work, and I do not think we ever got you a proper number. If it is still on your list I can have someone take a look and price it properly this time.`,
     active: true,
     // Shipped copy is send-as-written. Turning adaptation on is a decision
     // a franchise makes about their own words, not one we make for them.
@@ -342,7 +345,7 @@ export const TEMPLATE_FIXTURES: TemplateFixture[] = [
     stageId: null,
     track: null,
     subject: null,
-    body: `Hi {{contact.firstName}} — ${SENDER}. You asked about getting some painting done {{enquiry.month}} and I do not think we ever got you a proper number. If it is still on your list I can have someone take a look and price it properly this time.`,
+    body: `Hi {{contact.firstName}} — ${SENDER}. You asked about {{account.workType}} work {{enquiry.month}} and I do not think we ever got you a proper number. If it is still on your list I can have someone take a look and price it properly this time.`,
     active: true,
     // Shipped copy is send-as-written. Turning adaptation on is a decision
     // a franchise makes about their own words, not one we make for them.

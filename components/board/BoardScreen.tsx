@@ -110,14 +110,15 @@ export function BoardScreen({
 
   const anyExpanded = stages.some((s) => !collapsedByStage[s.id]);
 
+  /**
+   * Sends only the key that changed. Rebuilding the whole document from local
+   * state meant a sort save wrote back whatever `collapsedCols` this component
+   * happened to hold — which, on the list view, is what the page loaded before
+   * a collapse on the board had landed. The repository merges.
+   */
   function persist(next: Partial<BoardPrefs>) {
-    const prefsNext: BoardPrefs = {
-      collapsedCols,
-      listSort,
-      ...next,
-    };
     startTransition(async () => {
-      await saveBoardPrefsAction(prefsNext);
+      await saveBoardPrefsAction(next);
     });
   }
 

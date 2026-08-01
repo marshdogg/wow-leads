@@ -41,9 +41,10 @@
     ".next-a6build/types/**/*.ts",
     ".next-a6c/types/**/*.ts",
     ".next-a6d/types/**/*.ts",
+    ".next-a7/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts",
-    ".next-a7/types/**/*.ts"
+    ".next-a6f/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

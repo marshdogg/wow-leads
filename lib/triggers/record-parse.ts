@@ -1,4 +1,4 @@
-import type { sequenceSteps, touchpoints } from "@/db/schema";
+import type { sequenceSteps } from "@/db/schema";
 import { addDays, addMonths } from "./dates";
 import { lowerFirst, unpunctuated } from "./text";
 
@@ -17,7 +17,6 @@ import { lowerFirst, unpunctuated } from "./text";
  * never a guess.
  */
 
-type TouchpointRow = typeof touchpoints.$inferSelect;
 type SequenceStepRow = typeof sequenceSteps.$inferSelect;
 
 const MONTH_INDEX: Record<string, number> = {
@@ -109,26 +108,41 @@ export function isAbsent(value: string): boolean {
    Scope
    ------------------------------------------------------------------------- */
 
+/** The tags that name a trade. Anything else on a card describes something else. */
+const WORK_TYPE_TAGS = ["INTERIOR", "EXTERIOR", "INDUSTRIAL"];
+
 /**
- * Areas named on the completion record, which beats the account's standing
- * details because it says what was painted on *this* job.
+ * The work type an account is tagged with — **not** the work we did.
  *
- *   "Interior repaint completed — 4 rooms, hallway, stairwell · $8,400"
- *                                          → ["hallway", "stairwell"]
+ * The single derivation behind two callers that used to have one each: the
+ * `account.workType` template token, and `workTypeOf` below it in
+ * `fact-source.ts`, which adds the `"painting"` default. Two functions that
+ * agree today is the arrangement this codebase has spent a week dismantling,
+ * so there is one, and the default lives at the one call site that wants it.
+ *
+ * **Null when the account carries no work-type tag, and deliberately no
+ * default here.** A token that can never be null is a token the template
+ * eligibility check can never reject, which would re-arm the exact failure
+ * that check exists to prevent — "we don't know" and "it's painting" have to
+ * stay distinguishable or a template loses the ability to say less.
+ *
+ * Takes tags rather than a row so it stays pure and callable from either side
+ * of the deal/account split.
+ */
+export function workTypeTag(tags: string[]): string | null {
+  const tag = tags.find((t) => WORK_TYPE_TAGS.includes(t.toUpperCase()));
+  return tag ? tag.toLowerCase() : null;
+}
+
+/**
+ * Comma/and-separated area list → clean lowercase parts, counts removed.
  *
  * A bare count ("4 rooms") is dropped: it is a quantity, not a place, and
  * "touch up the 4 rooms zones" is not a sentence.
+ *
+ * Job areas come from `jobs.areas` as a real column. This parser is only for
+ * the account record's free-text scope detail, which has no column behind it.
  */
-export function jobScopeAreas(job: TouchpointRow | undefined): string[] {
-  if (!job) return [];
-  const structured = job.structured?.find((f) =>
-    /\b(rooms?|areas?|scope)\b/i.test(f.label),
-  );
-  const source = structured?.value ?? job.body.split("—")[1]?.split("·")[0];
-  return splitAreas(source);
-}
-
-/** Comma/and-separated area list → clean lowercase parts, counts removed. */
 export function splitAreas(source: string | undefined): string[] {
   if (!source || isAbsent(source)) return [];
   return source
@@ -139,58 +153,22 @@ export function splitAreas(source: string | undefined): string[] {
     );
 }
 
-/**
- * Does this JOB touchpoint record work being *finished*?
+/*
+ * There is deliberately no parser here for job facts out of JOB touchpoints.
  *
- * The `JOB` channel carries two different events. A completion —
- * "Interior repaint completed — 4 rooms, hallway, stairwell · $8,400" — and,
- * from `bookDeal`, an estimate booking: "Estimate scheduled — Thu Aug 6 at
- * 10:00 AM with Kris Jolin · EST-40218".
+ * `jobs` carries `completedAt`, `workType` and `areas` as columns, and it is
+ * the only source the fact builders read. The prose heuristics that used to
+ * live here — "does this row say completed?", "which work type does the body
+ * mention?" — were written before that table existed, because the `JOB`
+ * channel carries two unrelated events: a completion ("Interior repaint
+ * completed — 4 rooms, hallway, stairwell · $8,400") and, from `bookDeal`, an
+ * estimate booking ("Estimate scheduled — Thu Aug 6 at 10:00 AM").
  *
- * Reading the newest JOB row as the completion date conflates them, and the
- * failure is silent and severe: booking an estimate for a past customer made
- * their 11-month warranty trigger see a job finished today, so it stopped
- * firing. It would also have let a neighbour draft claim "we just finished"
- * about a house where nothing had been painted yet.
- *
- * So the test is what the row says happened, not which channel it arrived on.
+ * Keeping them as a second opinion behind an authoritative column is how two
+ * sources of truth get established. They disagree eventually, silently, and in
+ * a message a customer reads. The JOB touchpoint is now narrative only: it
+ * renders on the Record timeline and is not parsed.
  */
-export function isCompletionRecord(job: TouchpointRow): boolean {
-  // Prefer the structural marker: it says what the event *is*, rather than
-  // inferring it from how somebody phrased the body. The prose fallback stays
-  // for rows written before the marker existed and for anything logged by a
-  // path that does not set it — a completion should not stop counting as one
-  // because its row is older than the field.
-  const event = job.structured?.find((f) => f.label.toUpperCase() === "EVENT");
-  if (event) return event.value === "job_completed";
-  return /\b(completed|finished)\b/i.test(job.body);
-}
-
-/** The most recent JOB row that records work actually being finished. */
-export function completionEvent(
-  events: TouchpointRow[],
-): TouchpointRow | undefined {
-  return [...events]
-    .reverse()
-    .find((t) => t.channel.toUpperCase() === "JOB" && isCompletionRecord(t));
-}
-
-/**
- * The kind of work a completion record describes.
- *
- *   "Exterior repaint completed — siding, trim and front door · $9,250"
- *                                → "exterior"
- *
- * This beats the deal's tags, and the difference is not cosmetic: r8 is
- * tagged INTERIOR but its JOB row records an exterior repaint, so trusting
- * the tag put "we just finished the interior at 2308 Tunlaw" into a message
- * bound for the neighbours of a house whose outside we painted.
- */
-export function jobWorkType(job: TouchpointRow | undefined): string | null {
-  if (!job) return null;
-  const match = /\b(interior|exterior|industrial)\b/i.exec(job.body);
-  return match ? match[1].toLowerCase() : null;
-}
 
 /* -------------------------------------------------------------------------
    Proximity

@@ -83,7 +83,11 @@ function perTrigger(facts: TriggerFacts): TemplateFacts {
       return {
         "prospect.firstName": blankToNull(facts.contact.firstName),
         "prospect.company": blankToNull(facts.accountShortName),
-        "job.workType": blankToNull(facts.workType),
+        // `account.workType`, not `job.workType`. A cold prospect has no
+        // completed job, so supplying the tag under the job token made the
+        // same name mean two things — and the registry says job-derived, so
+        // it was the tag arriving under a description that denied it.
+        "account.workType": blankToNull(facts.workType),
         "reference.proof": facts.reference?.proof ?? null,
       };
 
@@ -104,7 +108,12 @@ function perTrigger(facts: TriggerFacts): TemplateFacts {
 
     case "never_quoted":
       return {
-        "job.workType": facts.enquiredAbout,
+        // Same reason as `sequence`: never quoted means never worked, so the
+        // only work type on the record came from the enquiry. Null when the
+        // account carries no tag — no default, because "we don't know" and
+        // "it's painting" must stay distinguishable or a template can no
+        // longer choose to say less.
+        "account.workType": facts.enquiredAbout,
         // Always present: "interior work" when the enquiry captured a scope,
         // a phrase true of any painting enquiry when it did not. A rendering
         // of what we know rather than a claim about their house, so it can be

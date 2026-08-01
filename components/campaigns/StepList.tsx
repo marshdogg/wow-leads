@@ -215,9 +215,23 @@ export function StepList({
                 </div>
               </div>
 
+              {/*
+                One wrapping row rather than a two-column grid. The grid's
+                `auto` column got squeezed at the 1440 review width and broke
+                "5 | days after the step above" across two lines with the
+                selects still beside it — a sentence split by a layout rule
+                that only wanted to make room. Flowing the three groups lets
+                them sit on one line when they fit and wrap whole when they
+                don't.
+              */}
               <div
-                className="grid grid-cols-1 sm:grid-cols-[auto_1fr]"
-                style={{ gap: 10, marginTop: 10, alignItems: "center" }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  marginTop: 10,
+                  flexWrap: "wrap",
+                }}
               >
                 <div
                   style={{
@@ -227,6 +241,8 @@ export function StepList({
                     flexWrap: "wrap",
                     fontSize: 13,
                     color: "#98a298",
+                    flex: "1 1 auto",
+                    minWidth: 0,
                   }}
                 >
                   {/*
@@ -271,12 +287,23 @@ export function StepList({
                   )}
                 </div>
 
-                {/* Right-aligned beside the delay on a wide row; left-aligned
-                    once the grid stacks, or a lone select floats to the right
-                    margin under a left-aligned sentence. */}
+                {/*
+                  `nowrap` is the load-bearing bit. The two selects travel as a
+                  unit: a channel that wrapped away from the template it
+                  constrains reads as an unrelated control, and letting them
+                  break against each other put "Email" alone on a line above
+                  its own step's delay. With nowrap they stay side by side and
+                  the *pair* drops to the next line when the row can't seat it.
+                */}
                 <div
-                  className="flex flex-wrap justify-start sm:justify-end"
-                  style={{ gap: 8 }}
+                  style={{
+                    display: "flex",
+                    flexWrap: "nowrap",
+                    gap: 8,
+                    flex: "1 1 300px",
+                    minWidth: 0,
+                    justifyContent: "flex-end",
+                  }}
                 >
                   <select
                     data-testid={`campaign-step-channel-${i}`}
@@ -296,7 +323,7 @@ export function StepList({
                         templateId: keep ? step.templateId : null,
                       });
                     }}
-                    style={{ ...selectStyle, width: "auto", flex: "0 1 120px" }}
+                    style={{ ...selectStyle, width: "auto", flex: "0 0 118px" }}
                   >
                     {STEP_CHANNELS.map((c) => (
                       <option key={c} value={c} style={optionStyle}>
@@ -312,10 +339,18 @@ export function StepList({
                     onChange={(e) =>
                       patch(step.key, { templateId: e.target.value || null })
                     }
-                    style={{ ...selectStyle, width: "auto", flex: "1 1 200px", minWidth: 0 }}
+                    style={{
+                      ...selectStyle,
+                      width: "auto",
+                      flex: "1 1 170px",
+                      minWidth: 0,
+                      // A select clips rather than ellipsizes by default, and a
+                      // half-printed word reads as a rendering fault.
+                      textOverflow: "ellipsis",
+                    }}
                   >
                     <option value="" style={optionStyle}>
-                      Copy chosen at send time
+                      Chosen at send time
                     </option>
                     {usable.map((t) => (
                       <option key={t.id} value={t.id} style={optionStyle}>

@@ -21,10 +21,8 @@ import { daysBetween, monthName } from "./dates";
 import {
   dayInSequence,
   isAbsent,
-  completionEvent,
-  jobScopeAreas,
-  jobWorkType,
   proximityFrom,
+  workTypeTag,
   parseInitialType,
   parseMonthDay,
   parseMonthYear,
@@ -95,13 +93,14 @@ export interface FactContext {
   /** Addresses to canvass, keyed by the job whose crew the neighbours can see. */
   canvassByDeal: Map<string, CanvassTargetRow[]>;
   /**
-   * Completed jobs by account, newest first.
+   * Completed jobs by account, oldest first.
    *
    * `jobs` is the source of job **facts**; the JOB touchpoint is the source of
    * job **narrative**. They answer different questions — the row carries the
    * timestamp, work type and areas that copy and campaigns are computed from,
-   * the touchpoint renders on the Record timeline. The touchpoint is not for
-   * parsing, and the prose fallback below is temporary.
+   * the touchpoint renders on the Record timeline. The touchpoint is never
+   * parsed, and there is deliberately no fallback to it: see the note in
+   * `record-parse.ts`.
    */
   jobsByAccount: Map<string, JobRow[]>;
 }
@@ -196,8 +195,6 @@ export async function loadFactContext(now: Date): Promise<FactContext> {
    Shared derivations
    ------------------------------------------------------------------------- */
 
-const WORK_TYPE_TAGS = ["INTERIOR", "EXTERIOR", "INDUSTRIAL"];
-
 const BEST_FIT_TAGS = [
   "GENERAL CONTRACTOR",
   "PROPERTY MANAGER",
@@ -281,24 +278,25 @@ export function metricValue(deal: DealRow, label: string): string | null {
   return hit?.value ?? null;
 }
 
+/**
+ * The tag with a default, for copy that needs *a* word for the trade.
+ *
+ * The default is applied here and nowhere else. `workTypeTag` stays nullable
+ * so the `account.workType` token can be absent, which is what lets a
+ * template with no work type in it be the one that resolves.
+ */
 function workTypeOf(deal: DealRow): string {
-  const tag = deal.tags.find((t) => WORK_TYPE_TAGS.includes(t.toUpperCase()));
-  return tag ? tag.toLowerCase() : "painting";
+  return workTypeTag(deal.tags) ?? "painting";
 }
 
-function scopeFacts(
-  ctx: FactContext,
-  deal: DealRow,
-  jobEvent?: TouchpointRow,
-  job?: JobRow,
-): ScopeFacts {
-  // Columns first, then the completion prose, then the card's tag. The tag is
-  // last because it describes the *account* — r8 is tagged INTERIOR while its
-  // job was an exterior repaint, and trusting the tag told the neighbours we
-  // had painted the inside of a house whose outside they watched us paint.
-  const workType = job?.workType ?? jobWorkType(jobEvent) ?? workTypeOf(deal);
-  const areas =
-    job?.areas && job.areas.length > 0 ? job.areas : jobScopeAreas(jobEvent);
+function scopeFacts(ctx: FactContext, deal: DealRow, job?: JobRow): ScopeFacts {
+  // The job's own columns first, the card's tag only when there is no job. The
+  // tag is last because it describes the *account* — r8 is tagged INTERIOR
+  // while its job was an exterior repaint, and trusting the tag told the
+  // neighbours we had painted the inside of a house whose outside they
+  // watched us paint.
+  const workType = job?.workType ?? workTypeOf(deal);
+  const areas = job?.areas ?? [];
   return {
     summary: `${workType.charAt(0).toUpperCase()}${workType.slice(1)} repaint`,
     workType,
@@ -323,13 +321,9 @@ export function scopeAreas(ctx: FactContext, deal: DealRow): string[] {
 }
 
 /**
- * The most recent completed job, from `jobs` where it exists.
- *
- * The JOB-touchpoint path behind it is a migration fallback and goes when the
- * last account is backfilled — along with `completionEvent` and
- * `isCompletionRecord`, whose prose heuristic only ever existed because
- * `bookDeal` writes estimate bookings on the same channel. A regex kept as a
- * second opinion behind an authoritative column is a liability, not a net.
+ * The most recent completed job. `jobs` is the only source — an account with
+ * no row there has no job facts, and the copy is built to say less rather than
+ * to guess from a touchpoint body.
  */
 function latestJob(ctx: FactContext, deal: DealRow): JobRow | undefined {
   const rows = deal.accountId ? (ctx.jobsByAccount.get(deal.accountId) ?? []) : [];
@@ -348,10 +342,8 @@ export function elevenMonthFacts(
 
   const events = dealTouchpoints(ctx, deal);
   const job = latestJob(ctx, deal);
-  const jobEvent = completionEvent(events);
   const jobCompletedAt =
     job?.completedAt ??
-    jobEvent?.occurredAt ??
     parseMonthYear(metricValue(deal, "COMPLETED")) ??
     (deal.stale.includes("since job")
       ? parseRelativeStale(deal.stale, ctx.now)
@@ -375,7 +367,7 @@ export function elevenMonthFacts(
     jobCompletedAt,
     completionFollowUpAt: followUp,
     lastContactAt: lastHumanContactAt(ctx, deal),
-    scope: scopeFacts(ctx, deal, jobEvent, job),
+    scope: scopeFacts(ctx, deal, job),
     replies: replyFacts(ctx, deal),
     now: ctx.now,
   };
@@ -687,10 +679,11 @@ export function neighbourCampaignFacts(
   );
   if (targets.length === 0) return [];
 
-  const events = dealTouchpoints(ctx, deal);
+  // No completed job, no claim to make. "We just finished the exterior next
+  // door" has to be true, and `jobs` is the only thing that knows whether it
+  // is — a JOB touchpoint might be an estimate booking.
   const job = latestJob(ctx, deal);
-  const jobEvent = completionEvent(events);
-  if (!job && !jobEvent) return [];
+  if (!job) return [];
 
   const jobAddress = deal.accountLine;
   if (!jobAddress) return [];
@@ -699,8 +692,8 @@ export function neighbourCampaignFacts(
   const details = account?.details ?? [];
   const known = knownAddresses(ctx);
   const contact = contactFacts(ctx, deal);
-  const scope = scopeFacts(ctx, deal, jobEvent, job);
-  const crew = job?.crew ?? crewName(details);
+  const scope = scopeFacts(ctx, deal, job);
+  const crew = job.crew ?? crewName(details);
   const onSiteUntil = crewOnSiteUntil(details, ctx.now);
 
   return targets.map((target) => ({
@@ -711,7 +704,7 @@ export function neighbourCampaignFacts(
     // rather than borrowing the neighbour's name.
     contact: { ...contact, name: "", firstName: "", address: target.address },
     jobAddress,
-    jobCompletedAt: job?.completedAt ?? jobEvent!.occurredAt,
+    jobCompletedAt: job.completedAt,
     scope,
     crewName: crew,
     crewOnSiteUntil: onSiteUntil,
@@ -796,7 +789,8 @@ export function neverQuotedFacts(
     sourceLabel: deal.source,
     // On a never-quoted record the work-type tag cannot describe a job,
     // because there isn't one — it can only have come from the enquiry.
-    enquiredAbout: workTypeTag(deal),
+    // Nullable on purpose: no tag means the copy names no trade.
+    enquiredAbout: workTypeTag(deal.tags),
     unworkedDays: unworkedFrom ? daysBetween(unworkedFrom, ctx.now) : null,
     everQuoted,
     now: ctx.now,
@@ -815,8 +809,3 @@ function isNeverQuotedShape(deal: DealRow, quoted: string | null): boolean {
   );
 }
 
-/** The work-type tag, or null when the account carries none. */
-function workTypeTag(deal: DealRow): string | null {
-  const tag = deal.tags.find((t) => WORK_TYPE_TAGS.includes(t.toUpperCase()));
-  return tag ? tag.toLowerCase() : null;
-}
