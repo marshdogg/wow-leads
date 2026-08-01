@@ -34,6 +34,8 @@ const DESKTOP_ROUTES = [
  * /field is the designated mobile surface, but no route may scroll sideways —
  * /record in particular carries the access notes a rep reads at the gate.
  */
+const PHONE_WIDTH = 390;
+
 const PHONE_ROUTES = [
   { name: "field-390", path: "/field" },
   { name: "record-390", path: "/record/r1" },
@@ -52,13 +54,36 @@ const PHONE_ROUTES = [
  * to it — the two-column record grid at 390px, where the right column is cut
  * off and unreachable.
  */
-async function measureOverflow(page) {
-  const m = await page.evaluate(() => {
-    // Exactly one horizontal scroller is intentional: the board's column
-    // strip, which is *designed* to run past the viewport. Naming it rather
-    // than exempting any `overflow-x: auto` ancestor keeps the check honest —
-    // a generic rule also excuses the clipped two-column record grid.
-    const contained = (el) => Boolean(el.closest('[data-testid="board-columns"]'));
+async function measureOverflow(page, viewportWidth) {
+  const m = await page.evaluate((vw) => {
+    // What counts as a defect is content the user cannot reach, so an element
+    // is excused only when some ancestor can actually scroll horizontally to
+    // reveal it — `scrollWidth > clientWidth`, not merely `overflow-x: auto`.
+    //
+    // Both looser rules are wrong. Exempting every `overflow-x: auto` ancestor
+    // excuses a grid that is genuinely clipped; exempting nothing but the
+    // board's column strip rejects any legitimate scroll container a future
+    // screen adds, because getBoundingClientRect() reports an element's layout
+    // position even when its ancestor clips it. `overflow-x: hidden` is
+    // deliberately not excused: that content is lost, not scrollable.
+    // The page itself is never a legitimate scroller: <html>/<body> scrolling
+    // sideways *is* the defect, so the walk stops before them.
+    const contained = (el) => {
+      for (
+        let p = el.parentElement;
+        p && p !== document.body && p !== document.documentElement;
+        p = p.parentElement
+      ) {
+        const ox = getComputedStyle(p).overflowX;
+        if (
+          (ox === "auto" || ox === "scroll") &&
+          p.scrollWidth > p.clientWidth + 1
+        ) {
+          return true;
+        }
+      }
+      return false;
+    };
     const widest = Array.from(document.querySelectorAll("*")).reduce(
       (max, el) => {
         const r = el.getBoundingClientRect();
@@ -67,12 +92,16 @@ async function measureOverflow(page) {
       },
       0,
     );
+    // Compared against the device width, never `window.innerWidth`: under
+    // mobile emulation the layout viewport *expands* to fit overflowing
+    // content, so innerWidth grows with the overflow and the difference
+    // silently reads zero.
     return {
-      body: document.body.scrollWidth - window.innerWidth,
-      doc: document.documentElement.scrollWidth - window.innerWidth,
-      widest: Math.round(widest) - window.innerWidth,
+      body: document.body.scrollWidth - vw,
+      doc: document.documentElement.scrollWidth - vw,
+      widest: Math.round(widest) - vw,
     };
-  });
+  }, viewportWidth);
   return { ...m, worst: Math.max(m.body, m.doc, m.widest) };
 }
 
@@ -108,7 +137,7 @@ async function main() {
 
   // Phone pass.
   const phone = await browser.newPage({
-    viewport: { width: 390, height: 844 },
+    viewport: { width: PHONE_WIDTH, height: 844 },
     deviceScaleFactor: 3,
     isMobile: true,
     hasTouch: true,
@@ -122,7 +151,7 @@ async function main() {
       path: join(OUT, `${shot.name}.png`),
       fullPage: true,
     });
-    const over = await measureOverflow(phone);
+    const over = await measureOverflow(phone, PHONE_WIDTH);
     if (over.worst > 1) {
       problems.push(
         `[390px] ${shot.path} overflows ${over.worst}px ` +
