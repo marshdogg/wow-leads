@@ -10,6 +10,7 @@ import type { PipelineCategory, PipelineConfig } from "@/lib/types";
 /** Nav entries that aren't pipelines. Pipelines are grouped above these. */
 const NAV = [
   { label: "Approvals", href: "/approvals" },
+  { label: "Templates", href: "/templates" },
   { label: "Field view", href: "/field" },
   { label: "Manager dashboard", href: "/manager" },
   { label: "Switcher", href: "/switcher" },
