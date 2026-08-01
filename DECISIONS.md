@@ -66,9 +66,21 @@ spec (`design-refs/README.md`) explicitly left open.
   holding a phone. Stacking a grid is the conventional degradation rather than a
   new design, so `/record` and `/manager` collapse under `md:` with desktop
   untouched. No mobile-only affordances were invented and nothing is hidden.
-  `scripts/shoot-app.mjs` asserts zero overflow at 390px on every route, with
-  one named exemption: the board's column strip, which is *meant* to scroll
-  sideways and whose content stays reachable.
+  `scripts/shoot-app.mjs` asserts zero overflow at 390px on every route.
+- **The overflow check excuses an element only when an ancestor can genuinely
+  scroll to reveal it** — `scrollWidth > clientWidth`, not merely
+  `overflow-x: auto`, and never `<html>`/`<body>`, because the page scrolling
+  sideways *is* the defect. `overflow-x: hidden` is not excused either: that
+  content is lost rather than reachable. Two looser rules were tried and both
+  were wrong — exempting every `overflow-x: auto` ancestor reported 0px on a
+  record grid whose right column was visibly clipped, and exempting only the
+  board's strip by name rejected the legitimate scroll containers another
+  screen had added. The check also compares against a **fixed 390**, never
+  `window.innerWidth`: under mobile emulation the layout viewport expands to
+  fit overflowing content, so the difference silently reads zero. That last bug
+  was masking a real defect — `/board` was dragging the whole page sideways by
+  543px because a flex child kept its default `min-width: auto` and the header
+  control row never wrapped.
 
 - **`last_touch_at` means the most recent touchpoint**, not the age of whatever
   the `stale` display string happens to mention. The two are stored separately:
