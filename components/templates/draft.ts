@@ -10,6 +10,7 @@
 import {
   factsSatisfy,
   renderTemplate,
+  resolveTemplate,
   tokensIn,
   unknownTokens,
 } from "@/lib/templates/resolve";
@@ -17,9 +18,16 @@ import type {
   MessageTemplate,
   TemplateChannel,
   TemplateFacts,
+  TemplateQuery,
 } from "@/lib/templates/types";
 import { PIPES, TRACK_STYLE } from "@/lib/pipelines";
-import type { PipelineId, StageId, TrackId, TriggerType } from "@/lib/types";
+import type {
+  ContactChannel,
+  PipelineId,
+  StageId,
+  TrackId,
+  TriggerType,
+} from "@/lib/types";
 
 /** The editable subset of a template. */
 export interface TemplateDraft {
@@ -203,6 +211,58 @@ export function previewTemplate(
   };
 }
 
+/** Every channel a record's preference could turn out to be. */
+const CANDIDATE_CHANNELS: ContactChannel[] = ["SMS", "EMAIL", "PHONE"];
+
+/**
+ * Which template would be used instead of this one, when that can be answered
+ * without guessing.
+ *
+ * The obstacle is that the previewed record's channel is not reliably known:
+ * the repository falls back to `EMAIL` for a record with no contact, and
+ * `contacts.prefers` is `NOT NULL DEFAULT 'EMAIL'`, so a stated email
+ * preference and an unstated one are the same value at rest. Asking "is the
+ * channel known?" is therefore unanswerable.
+ *
+ * So this asks the answerable question instead: **does the channel change the
+ * answer?** Resolve once per possible channel; if every one picks the same
+ * template, the guess was irrelevant and the name is a supported claim. If
+ * they disagree, a channel-scoped template is in play, and the caller keeps
+ * the vaguer wording rather than naming one that might never be chosen.
+ *
+ * Returns null when the template being edited has no trigger, because "any
+ * trigger" has no single answer either.
+ */
+export function fallbackTemplate(
+  templates: MessageTemplate[],
+  draft: TemplateDraft,
+  ctx: PreviewContext,
+): MessageTemplate | null {
+  if (!draft.triggerType) return null;
+
+  // The saved version of what's being edited is not its own alternative.
+  const others = templates.filter((t) => t.id !== draft.id);
+
+  let agreed: MessageTemplate | null = null;
+  for (const channel of CANDIDATE_CHANNELS) {
+    const winner = resolveTemplate(
+      others,
+      { ...ctx.query, channel, triggerType: draft.triggerType },
+      ctx.facts,
+    );
+    if (!winner) return null;
+    if (!agreed) agreed = winner;
+    else if (agreed.id !== winner.id) return null;
+  }
+  return agreed;
+}
+
+/** Structural mirror of `TemplatePreviewContext` from the repository. */
+export interface PreviewContext {
+  facts: TemplateFacts;
+  query: Omit<TemplateQuery, "triggerType">;
+}
+
 /**
  * Why a template won't be used for a record, in the author's words rather than
  * an error's. Returns null when it will be used.
@@ -215,6 +275,8 @@ export function previewTemplate(
 export function eligibilityExplanation(
   result: PreviewResult,
   recordName: string,
+  /** From {@link fallbackTemplate}; omitted when it can't be named honestly. */
+  fallbackName?: string | null,
 ): string | null {
   if (result.eligible) return null;
   if (result.unknown.length) {
@@ -224,10 +286,13 @@ export function eligibilityExplanation(
   // were written to sit beside one variable at a time in the palette; three of
   // them concatenated read as a wall and bury the only line that explains what
   // is happening. Name the tokens here, let the palette describe them.
+  const instead = fallbackName
+    ? `sends “${fallbackName}” instead`
+    : `falls through to a simpler template`;
+
   return (
     `${recordName} has no value for ${list(result.missing.map((t) => `{{${t}}}`))}. ` +
-    `Rather than send a sentence with a hole in it, the agent falls through to ` +
-    `a simpler template.`
+    `Rather than send a sentence with a hole in it, the agent ${instead}.`
   );
 }
 

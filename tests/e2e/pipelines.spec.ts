@@ -188,7 +188,18 @@ test("the never-quoted track separates contacts on file from past customers", as
   const cards = page.locator('[data-testid^="lead-card-r"]');
   await expect(cards).toHaveCount(2);
   await expect(page.getByText("NEVER QUOTED").first()).toBeVisible();
+
+  // A collapsed card renders only its summary, so the metric strip below is
+  // absent — and collapse is a saved preference that outlives a run. Expand
+  // first rather than assume, so this fails only for its own reasons.
+  const column = page.getByTestId("column-past");
+  if ((await column.getAttribute("data-collapsed")) === "true") {
+    await page.getByTestId("column-collapse-past").click();
+    await expect(column).toHaveAttribute("data-collapsed", "false");
+  }
+
   // A never-quoted lead has no price to reference — that is the whole point.
+  await expect(page.getByTestId("lead-card-r10")).toContainText("QUOTED");
   await expect(page.getByTestId("lead-card-r10")).toContainText("Never");
 });
 
