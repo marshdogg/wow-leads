@@ -57,6 +57,19 @@ spec (`design-refs/README.md`) explicitly left open.
 
 ## Other decisions worth knowing
 
+- **Every route stacks to one column below `md`, not just the Field view.** The
+  brief scoped the phone requirement to `/field`, and the prototype is a
+  1600×1040 desktop design — but at 390px the record's `1.4fr 1fr` grid pushed
+  its whole right column (RECORD meta, NEXT STEP, Suggestions) off-screen and
+  clipped it. The deciding case was the **amber access-notes block**: "side gate
+  code 4417, park in the alley behind, two cats" is read standing at a gate
+  holding a phone. Stacking a grid is the conventional degradation rather than a
+  new design, so `/record` and `/manager` collapse under `md:` with desktop
+  untouched. No mobile-only affordances were invented and nothing is hidden.
+  `scripts/shoot-app.mjs` asserts zero overflow at 390px on every route, with
+  one named exemption: the board's column strip, which is *meant* to scroll
+  sideways and whose content stays reachable.
+
 - **`last_touch_at` means the most recent touchpoint**, not the age of whatever
   the `stale` display string happens to mention. The two are stored separately:
   "4 mo since job" describes a job, "19d silent" describes a touch, and only the
