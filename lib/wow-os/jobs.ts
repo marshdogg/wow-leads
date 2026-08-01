@@ -29,13 +29,22 @@
  *       "crew":        "Dani Koval"             // optional
  *     }
  *
- * Responses: `200 {"ok":true,"jobId":…,"created":true|false}` · `400` invalid
- * body (the response names the failing fields) · `401` missing/bad secret.
+ * Responses:
+ *   200  {"ok":true,"jobId":"WO-88421","id":"job-29a91384","created":true}
+ *        `id` is ours and stable across redeliveries; `created` distinguishes
+ *        the first delivery from a retry.
+ *   400  {"error":"Invalid payload","fields":{…}} — names the failing fields.
+ *        Also returned for an `accountId` we do not hold.
+ *   401  missing or wrong secret.
  *
  * **`jobId` is the idempotency key.** Retry freely: redelivering the same
  * `jobId` updates the existing row and returns `created:false`. It will never
  * produce a second row, and therefore never a second review request. Retry on
  * any 5xx or timeout; do not retry a 400.
+ *
+ * **`seed:` is a reserved prefix** and a `jobId` starting with it is rejected.
+ * Seeded demo rows carry it so `getJobCompletionStats()` can report how many
+ * completions genuinely came from the Funnel.
  *
  * `completedAt` is the one field that must be right. It is a real timestamp
  * driving "fire N days after completion" — the display strings already on a
@@ -58,7 +67,6 @@
  */
 
 import { z } from "zod";
-import type { CompletedJob } from "@/lib/campaigns/types";
 
 /* -------------------------------------------------------------------------
    Payload
@@ -71,8 +79,21 @@ export const WORK_TYPES = ["interior", "exterior", "industrial"] as const;
 const FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
 
 export const jobCompletedPayloadSchema = z.object({
-  /** The Funnel's own job id. The idempotency key — see the header. */
-  jobId: z.string().min(1).max(64),
+  /**
+   * The Funnel's own job id. The idempotency key — see the header.
+   *
+   * `seed:` is reserved: the seed marks its rows with that prefix so
+   * `getJobCompletionStats()` can report how many completions actually came
+   * from the Funnel. A real ref using it would be counted as demo data.
+   */
+  jobId: z
+    .string()
+    .min(1)
+    .max(64)
+    .refine(
+      (v) => !v.startsWith("seed:"),
+      "jobId may not start with the reserved prefix `seed:`",
+    ),
   accountId: z.string().min(1).max(64),
   dealId: z.string().min(1).max(64).nullish(),
   /**
@@ -102,17 +123,30 @@ export type JobCompletedPayload = z.infer<typeof jobCompletedPayloadSchema>;
    ------------------------------------------------------------------------- */
 
 /**
- * Payload → the domain shape the campaign audiences evaluate against.
+ * Payload → `upsertCompletedJob`'s input.
  *
- * `id` is *ours*: a deterministic local id derived from the Funnel's `jobId`,
- * so the same completion always maps to the same row without our primary keys
- * inheriting an external system's id format.
+ * Note what is *not* here: an `id`. The repository owns key generation and
+ * conflicts on `wow_os_job_id`, a column with its own unique index, so the
+ * Funnel's ref is stored as data rather than folded into our primary key.
+ *
+ * An earlier version of this file derived a local id from the ref instead,
+ * because `jobs` had no column to conflict on. That worked, but it made our
+ * primary keys carry an external system's id format — and the derivation had
+ * to be injective or two Funnel refs could collapse into one row and silently
+ * merge two jobs. A unique column removes the whole class of problem.
  */
-export function toCompletedJob(
-  payload: JobCompletedPayload,
-): CompletedJob & { wowOsJobId: string } {
+export function toUpsertInput(payload: JobCompletedPayload): {
+  wowOsJobId: string;
+  accountId: string;
+  dealId: string | null;
+  completedAt: Date;
+  workType: string;
+  scope: string;
+  areas: string[];
+  valueCents: number;
+  crew: string | null;
+} {
   return {
-    id: localJobId(payload.jobId),
     wowOsJobId: payload.jobId,
     accountId: payload.accountId,
     dealId: payload.dealId ?? null,
@@ -126,18 +160,18 @@ export function toCompletedJob(
 }
 
 /**
- * `WO-88421` → `job-os-WO-88421`.
+ * Seeded completions carry a `seed:` prefix on `wowOsJobId`; Funnel-delivered
+ * ones carry the Funnel's own ref. That prefix is the seam that keeps the
+ * demo data honest — see `getJobCompletionStats()`, which counts anything
+ * `seed:` as *not* from the Funnel so a screen can say "5 completions, none
+ * live yet" rather than implying an integration that does not exist.
  *
- * Two deliberate choices. The `job-os-` prefix namespaces Funnel-delivered
- * rows away from the seed's `job-r1` style, so ingest can never overwrite
- * demo data (or vice versa). And the ref is embedded **verbatim** rather than
- * lower-cased or slugified: normalising is lossy, and two distinct Funnel ids
- * collapsing to one local id would silently merge two jobs into one row —
- * which is the exact failure the idempotency key exists to prevent.
- *
- * `jobs` has no column for the Funnel's id, so the primary key carries it.
- * See the note in the route about what a dedicated unique column would buy.
+ * The Funnel must never send a ref beginning `seed:`. It would not corrupt
+ * anything, but it would be counted as demo data and under-report real
+ * ingest, so the payload schema rejects it.
  */
-export function localJobId(wowOsJobId: string): string {
-  return `job-os-${wowOsJobId}`;
+export const SEED_JOB_PREFIX = "seed:";
+
+export function isSeededJobRef(wowOsJobId: string | null): boolean {
+  return Boolean(wowOsJobId?.startsWith(SEED_JOB_PREFIX));
 }

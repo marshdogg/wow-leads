@@ -15,6 +15,7 @@ import {
   contacts,
   deals,
   promos,
+  jobs,
   templates,
   touchpoints,
 } from "@/db/schema";
@@ -30,9 +31,6 @@ import {
 } from "@/lib/triggers/dates";
 import {
   isAbsent,
-  isCompletionRecord,
-  jobScopeAreas,
-  jobWorkType,
   parseMonthYear,
   proximityClause,
   proximityFrom,
@@ -324,6 +322,9 @@ export async function getTemplatePreviewContextFor(
   if (!dealRows.length) return {};
 
   const accountIds = dealRows.map((d) => d.accountId).filter(isPresent);
+  const sourceAccountIds = dealRows
+    .map((d) => d.sourcedFromDealId)
+    .filter(isPresent);
   const sourceJobIds = dealRows
     .map((d) => d.sourcedFromDealId)
     .filter(isPresent);
@@ -336,9 +337,9 @@ export async function getTemplatePreviewContextFor(
     touchpointRows,
     promoRows,
     sourceJobRows,
-    sourceJobTouchpoints,
     canvassRows,
     referenceRows,
+    jobRows,
   ] = await Promise.all([
     accountIds.length
       ? db
@@ -360,13 +361,6 @@ export async function getTemplatePreviewContextFor(
     sourceJobIds.length
       ? db.select().from(deals).where(inArray(deals.id, sourceJobIds))
       : [],
-    sourceJobIds.length
-      ? db
-          .select()
-          .from(touchpoints)
-          .where(inArray(touchpoints.dealId, sourceJobIds))
-          .orderBy(desc(touchpoints.occurredAt))
-      : [],
     db
       .select()
       .from(canvassTargets)
@@ -382,6 +376,10 @@ export async function getTemplatePreviewContextFor(
       .from(deals)
       .where(eq(deals.pipelineId, "comm"))
       .orderBy(asc(deals.id)),
+    // The completions table, which is authoritative for job *facts*.
+    accountIds.length || sourceAccountIds.length
+      ? db.select().from(jobs).orderBy(desc(jobs.completedAt))
+      : [],
   ]);
 
   const byAccount = groupBy(contactRows, (c) => c.accountId);
@@ -389,28 +387,39 @@ export async function getTemplatePreviewContextFor(
   const touchByDeal = groupBy(touchpointRows, (t) => t.dealId);
   const promoById = new Map(promoRows.map((p) => [p.id, p]));
   const jobById = new Map(sourceJobRows.map((d) => [d.id, d]));
-  const jobTouchByDeal = groupBy(sourceJobTouchpoints, (t) => t.dealId);
   const canvassByDeal = new Map(
     canvassRows.filter((c) => c.dealId).map((c) => [c.dealId!, c]),
   );
+  // Newest completion per account. Rows arrive newest-first, so the first win
+  // is the latest.
+  const jobByAccount = new Map<string, (typeof jobRows)[number]>();
+  for (const j of jobRows) {
+    if (!jobByAccount.has(j.accountId)) jobByAccount.set(j.accountId, j);
+  }
 
   const sender = getCurrentUser();
   const out: Record<string, TemplatePreviewContext> = {};
 
   for (const deal of dealRows) {
     const own = touchByDeal.get(deal.id) ?? [];
-    // A neighbour lead's job is the one it was sourced from; everyone else's
-    // is their own.
-    const jobDealId = deal.sourcedFromDealId ?? deal.id;
-    const jobTouchpoints = deal.sourcedFromDealId
-      ? (jobTouchByDeal.get(jobDealId) ?? [])
-      : own;
-    const job = jobTouchpoints.find(
-      (t) => t.channel === "JOB" && isCompletionRecord(t),
-    );
     const sourceJob = deal.sourcedFromDealId
       ? jobById.get(deal.sourcedFromDealId)
       : null;
+
+    /*
+     * `jobs` is the source of job **facts**; the JOB touchpoint is the source
+     * of job **narrative**. Both keep existing and they answer different
+     * questions — the touchpoint renders on the Record timeline, the row
+     * carries the timestamp, work type and areas that copy and campaigns are
+     * computed from. **The touchpoint is not for parsing.**
+     *
+     * There is deliberately no fallback to the prose any more. A regex hunting
+     * "completed" in a sentence was only ever needed because no column could
+     * answer the question, and keeping it as a second opinion behind an
+     * authoritative one is how two sources of truth get established.
+     */
+    const jobAccountId = sourceJob?.accountId ?? deal.accountId;
+    const job = jobAccountId ? jobByAccount.get(jobAccountId) : undefined;
 
     const primary =
       (byAccount.get(deal.accountId ?? "") ?? []).find((c) => c.isPrimary) ??
@@ -420,8 +429,9 @@ export async function getTemplatePreviewContextFor(
     // would make "the {{job.workType}} work we did for you" eligible for a
     // lead who has never had a job — the precise sentence this feature exists
     // to prevent. What they *enquired* about is `enquiry.subject`.
-    const workType = jobWorkType(job);
-    const areas = jobScopeAreas(job);
+    const workType = job?.workType ?? null;
+    const areas = job?.areas ?? [];
+    const completedAt = job?.completedAt ?? null;
     const promo = deal.promoId ? promoById.get(deal.promoId) : null;
     const promoSend = own.find((t) => /offer sent|promo/i.test(t.body));
     const loss = own.find((t) => /\blost\b/i.test(t.body));
@@ -454,12 +464,12 @@ export async function getTemplatePreviewContextFor(
 
         "job.scope": workType ? `the ${workType} work` : null,
         "job.workType": workType,
-        "job.completedMonth": job
-          ? completionPhrase(job.occurredAt, now)
+        "job.completedMonth": completedAt
+          ? completionPhrase(completedAt, now)
           : null,
         "job.areas": areas.length ? joinList(areas) : null,
         "job.address":
-          sourceJob?.accountLine ?? (job ? deal.accountLine : null),
+          sourceJob?.accountLine ?? (completedAt ? deal.accountLine : null),
 
         "promo.discount": promo?.discount ?? null,
         "promo.label": promo?.label ?? null,

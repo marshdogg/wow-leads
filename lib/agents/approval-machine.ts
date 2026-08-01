@@ -137,7 +137,12 @@ export function suppressionUntil(now: Date): Date {
 export const SUPPRESSION_ACTION = "trigger.suppressed";
 
 export interface SuppressionRecord {
-  triggerType: TriggerType;
+  /**
+   * Null for a campaign send. Suppression keys on (deal, trigger), so a
+   * skipped campaign message does not suppress a trigger — the campaign's own
+   * enrolment state is what stops it repeating.
+   */
+  triggerType: TriggerType | null;
   approvalId: string;
   suppressedUntil: string;
 }
@@ -158,6 +163,14 @@ interface PlannedNextAction {
  * stop.
  */
 export function nextActionFor(approval: Approval, now: Date): PlannedNextAction {
+  // A campaign send has no trigger type. The follow-up is the same shape
+  // either way — somebody has to look for a reply — so it gets a next action
+  // rather than being left without one, which is the state this whole
+  // product exists to prevent.
+  if (!approval.triggerType) {
+    return { label: "Check for a reply", dueAt: addDays(now, 3) };
+  }
+
   switch (approval.triggerType) {
     case "eleven_month":
       return {

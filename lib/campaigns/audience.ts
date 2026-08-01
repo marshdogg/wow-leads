@@ -1,9 +1,4 @@
-import type {
-  Audience,
-  AudienceFacts,
-  AudienceKind,
-  AudienceParams,
-} from "./types";
+import type { Audience, AudienceFacts, AudienceKind } from "./types";
 
 /**
  * Audience evaluation. Pure — no database, no clock passed implicitly — so the
@@ -11,13 +6,19 @@ import type {
  * screen can size an audience before anyone commits to sending anything.
  */
 
+/**
+ * `sentence` used to live here as a fragment builder. It was removed: two of
+ * the four kinds don't compose into a sentence ("Enrols customers no job in
+ * the last 18 months"), and `pipeline_stage` could only render raw ids, which
+ * name nothing a franchise owner has seen on screen. Prose that resolves
+ * labels through `PIPES` belongs in the UI — see `audienceSentence` in
+ * `components/campaigns/draft.ts`.
+ */
 export interface AudienceKindSpec {
   kind: AudienceKind;
   label: string;
   /** What it selects, in the words a franchise owner would use. */
   description: string;
-  /** Rendered in the editor to build the sentence around the input. */
-  sentence: (params: AudienceParams) => string;
   /** Whether this kind can be evaluated at all right now. */
   requires?: "job-completions";
 }
@@ -28,7 +29,6 @@ export const AUDIENCE_KINDS: AudienceKindSpec[] = [
     label: "Customers whose job finished N days ago",
     description:
       "Fires a set number of days after a job completes. Review requests, warranty check-ins, anything timed off the work itself.",
-    sentence: (p) => `${p.days ?? 0} days after their job finished`,
     requires: "job-completions",
   },
   {
@@ -36,7 +36,6 @@ export const AUDIENCE_KINDS: AudienceKindSpec[] = [
     label: "Customers with no job in N months",
     description:
       "Everyone we have worked for, but not lately. Cross-sell and win-back.",
-    sentence: (p) => `no job in the last ${p.months ?? 0} months`,
     requires: "job-completions",
   },
   {
@@ -44,13 +43,11 @@ export const AUDIENCE_KINDS: AudienceKindSpec[] = [
     label: "Everyone tagged X",
     description:
       "A flat list by tag. Newsletters and service-specific offers.",
-    sentence: (p) => `tagged ${p.tag ?? "…"}`,
   },
   {
     kind: "pipeline_stage",
     label: "Everyone in a pipeline stage",
     description: "Stage-based nurture that doesn't warrant its own trigger.",
-    sentence: (p) => `sitting in ${p.pipelineId ?? "…"} · ${p.stageId ?? "…"}`,
   },
 ];
 

@@ -95,20 +95,25 @@ export function TemplatesScreen({
         allowAiAdaptation: draft.allowAiAdaptation,
       });
 
-      if (res.ok) {
-        showToast(
-          draft.isDefault
-            ? `Saved as your version of “${res.template.name}” — the shipped copy is untouched`
-            : `“${res.template.name}” saved`,
-        );
-        // Re-point at the fork, or the next save would fork again.
-        setSelectedId(res.template.id);
-        setDraft(toDraft(res.template));
-      } else {
-        showToast(res.error);
+      try {
+        if (res.ok) {
+          showToast(
+            draft.isDefault
+              ? `Saved as your version of “${res.template.name}” — the shipped copy is untouched`
+              : `“${res.template.name}” saved`,
+          );
+          // Re-point at the fork, or the next save would fork again.
+          setSelectedId(res.template.id);
+          setDraft(toDraft(res.template));
+        } else {
+          showToast(res.error);
+        }
+        router.refresh();
+      } finally {
+        // In a finally so a rejected action doesn't leave Save disabled with
+        // no way back — the user would have to reload to try again.
+        setSaving(false);
       }
-      setSaving(false);
-      router.refresh();
     })();
   };
 

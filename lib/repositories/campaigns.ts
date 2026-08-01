@@ -14,6 +14,7 @@ import { db } from "@/db";
 import {
   accounts,
   campaignEnrolments,
+  campaignSends,
   campaignSteps,
   campaigns,
   deals,
@@ -27,6 +28,7 @@ import type {
   AudienceKind,
   AudienceParams,
   Campaign,
+  CampaignEnrolment,
   CampaignStep,
 } from "@/lib/campaigns/types";
 import type { PipelineCategory, PipelineId } from "@/lib/types";
@@ -60,6 +62,10 @@ function toCampaign(row: CampaignRow, steps: StepRow[]): Campaign {
     active: row.active,
     reenrolAfterDays: row.reenrolAfterDays,
     authoredBy: row.authoredBy,
+    lastRunCount: row.lastRunCount,
+    approvedAt: row.approvedAt,
+    approvedBy: row.approvedBy,
+    approvedHash: row.approvedHash,
     steps: steps
       .filter((s) => s.campaignId === row.id)
       .sort((a, b) => a.stepNumber - b.stepNumber)
@@ -198,9 +204,102 @@ export async function saveCampaign(
     },
   });
 
+  // Any edit invalidates a bulk approval — the approved thing no longer
+  // exists. Skipped when nothing was approved, so an ordinary save on a
+  // per-message campaign writes no noise into the audit trail.
+  if (existing?.approvedHash) await revokeApproval(id, input.actorUserId);
+
   const saved = await getCampaign(id);
   if (!saved) throw new Error(`Campaign "${id}" vanished after save.`);
   return saved;
+}
+
+/**
+ * Clears a bulk approval. Called by `saveCampaign` on every edit rather than
+ * left to the caller: an approval that survives an edit to the audience or the
+ * copy is not a gate, and "remember to revoke" is not a mechanism.
+ */
+async function revokeApproval(id: string, actorUserId: string): Promise<void> {
+  await db
+    .update(campaigns)
+    .set({ approvedAt: null, approvedBy: null, approvedHash: null })
+    .where(eq(campaigns.id, id));
+  await appendAudit({
+    entity: "campaign",
+    entityId: id,
+    action: "approval.revoked",
+    userId: actorUserId,
+    before: { approved: true },
+    after: { approved: false, reason: "campaign edited" },
+  });
+}
+
+/**
+ * Records a bulk approval of the current campaign version.
+ *
+ * The hash is computed by `lib/campaigns/approval.ts` from the audience, the
+ * steps and the *resolved* copy — so re-pointing a step, or editing the
+ * template a step points at, both invalidate it. Stored verbatim; deriving it
+ * here would put a second implementation of the rule in the repository.
+ */
+export async function approveCampaign(input: {
+  campaignId: string;
+  actorUserId: string;
+  hash: string;
+}): Promise<void> {
+  const before = await getCampaign(input.campaignId);
+  if (!before) throw new Error(`Campaign "${input.campaignId}" not found.`);
+  if (before.approvalMode !== "bulk") {
+    throw new Error(
+      `Campaign "${input.campaignId}" approves per message — there is nothing to bulk-approve.`,
+    );
+  }
+
+  const now = new Date();
+  await db
+    .update(campaigns)
+    .set({
+      approvedAt: now,
+      approvedBy: input.actorUserId,
+      approvedHash: input.hash,
+    })
+    .where(eq(campaigns.id, input.campaignId));
+
+  await appendAudit({
+    entity: "campaign",
+    entityId: input.campaignId,
+    action: "approval.granted",
+    userId: input.actorUserId,
+    before: { approvedHash: before.approvedHash },
+    after: { approvedHash: input.hash },
+  });
+}
+
+/**
+ * Removes a campaign and everything downstream of it. Enrolments and sends
+ * cascade — a send record for a campaign nobody can look up is not history,
+ * it is litter.
+ */
+export async function deleteCampaign(
+  id: string,
+  actorUserId: string,
+): Promise<void> {
+  const before = await getCampaign(id);
+  if (!before) throw new Error(`Campaign "${id}" not found.`);
+
+  await db.delete(campaigns).where(eq(campaigns.id, id));
+  await appendAudit({
+    entity: "campaign",
+    entityId: id,
+    action: "delete",
+    userId: actorUserId,
+    before: {
+      name: before.name,
+      audience: before.audience,
+      active: before.active,
+    },
+    after: null,
+  });
 }
 
 export async function setCampaignActive(
@@ -267,10 +366,10 @@ export async function getAudienceDealIds(
     ) >= ${params.months}`;
   } else if (kind === "tagged") {
     if (!params.tag) return [];
-    predicate = sql`${deals.tags} @> ${JSON.stringify([params.tag])}::jsonb`;
+    predicate = sql`d.tags @> ${JSON.stringify([params.tag])}::jsonb`;
   } else {
     if (!params.pipelineId || !params.stageId) return [];
-    predicate = sql`${deals.pipelineId} = ${params.pipelineId} and ${deals.stageId} = ${params.stageId}`;
+    predicate = sql`d.pipeline_id = ${params.pipelineId} and d.stage_id = ${params.stageId}`;
   }
 
   // Never having had a job is not the same as not having had one lately, so
@@ -302,9 +401,7 @@ function enrolmentGuard(
   now: Date,
   campaignId?: string,
 ): SQL {
-  const scope = campaignId
-    ? sql`and e.campaign_id = ${campaignId}`
-    : sql``;
+  const scope = campaignId ? sql`and e.campaign_id = ${campaignId}` : sql``;
   const recent =
     reenrolAfterDays === null
       ? sql`true`
@@ -396,10 +493,7 @@ export async function getAudienceFactsFor(
  * nobody. Today only the seed writes jobs — the Funnel does not send them yet.
  */
 export async function hasJobCompletions(): Promise<boolean> {
-  const [row] = await db
-    .select({ id: jobs.id })
-    .from(jobs)
-    .limit(1);
+  const [row] = await db.select({ id: jobs.id }).from(jobs).limit(1);
   return Boolean(row);
 }
 
@@ -412,8 +506,15 @@ export async function getJobsForAccount(accountId: string) {
     .orderBy(sql`${jobs.completedAt} desc`);
 }
 
-export async function getEnrolments(campaignId: string) {
-  return db
+/**
+ * Active enrolments, with `state` as the union rather than a bare string.
+ * An unrecognised value maps to `exited`, never to active — a state nobody
+ * planned for must not read as "still sending to this person".
+ */
+export async function getEnrolments(
+  campaignId: string,
+): Promise<CampaignEnrolment[]> {
+  const rows = await db
     .select()
     .from(campaignEnrolments)
     .where(
@@ -422,4 +523,343 @@ export async function getEnrolments(campaignId: string) {
         eq(campaignEnrolments.state, "active"),
       ),
     );
+  return rows.map(toEnrolment);
+}
+
+/**
+ * Records how many recipients a run selected, for the volume guard. A campaign
+ * approved against 50 accounts should not quietly send to 5,000 when the tag
+ * grows — this is what the guard compares against.
+ */
+export async function recordRunCount(
+  campaignId: string,
+  count: number,
+): Promise<void> {
+  await db
+    .update(campaigns)
+    .set({ lastRunCount: count })
+    .where(eq(campaigns.id, campaignId));
+}
+
+/* -------------------------------------------------------------------------
+   The editor's candidate list
+   ------------------------------------------------------------------------- */
+
+export interface AudienceCandidate extends AudienceFacts {
+  dealId: string;
+  name: string;
+  account: string;
+}
+
+/**
+ * Every deal an audience could select, with the facts to judge it by.
+ *
+ * Shipped whole so the editor can re-size the audience client-side as someone
+ * types "4" then "40" — a round trip per digit makes the count read as a
+ * report rather than a readout, and it cannot produce the sample names that
+ * make the number checkable rather than asserted. `audienceSizeFor` exists
+ * alongside for the list, where one number per campaign beats shipping every
+ * candidate N times.
+ */
+export async function getAudienceCandidates(): Promise<AudienceCandidate[]> {
+  const [dealRows, jobRows, enrolmentRows, accountRows] = await Promise.all([
+    db.select().from(deals).orderBy(asc(deals.id)),
+    db
+      .select({ accountId: jobs.accountId, completedAt: jobs.completedAt })
+      .from(jobs),
+    db
+      .select({
+        dealId: campaignEnrolments.dealId,
+        enrolledAt: campaignEnrolments.enrolledAt,
+      })
+      .from(campaignEnrolments),
+    db.select({ id: accounts.id, tags: accounts.tags }).from(accounts),
+  ]);
+
+  const latestJob = new Map<string, Date>();
+  for (const j of jobRows) {
+    const current = latestJob.get(j.accountId);
+    if (!current || j.completedAt > current) {
+      latestJob.set(j.accountId, j.completedAt);
+    }
+  }
+  const latestEnrolment = new Map<string, Date>();
+  for (const e of enrolmentRows) {
+    const current = latestEnrolment.get(e.dealId);
+    if (!current || e.enrolledAt > current) {
+      latestEnrolment.set(e.dealId, e.enrolledAt);
+    }
+  }
+  const tagsByAccount = new Map(accountRows.map((a) => [a.id, a.tags]));
+
+  return dealRows.map((d) => ({
+    dealId: d.id,
+    name: d.name,
+    account: d.accountLine,
+    // Null when they have never had a job — which is not the same as an old
+    // job, and is why both job audiences exclude rather than admit them.
+    jobCompletedAt: d.accountId ? (latestJob.get(d.accountId) ?? null) : null,
+    tags: Array.from(
+      new Set([...d.tags, ...(tagsByAccount.get(d.accountId ?? "") ?? [])]),
+    ),
+    pipelineId: d.pipelineId as PipelineId,
+    stageId: d.stageId,
+    lastEnrolledAt: latestEnrolment.get(d.id) ?? null,
+  }));
+}
+
+/* -------------------------------------------------------------------------
+   Enrolment lifecycle — what the runner drives
+   ------------------------------------------------------------------------- */
+
+/**
+ * Enrols someone, or re-enrols them.
+ *
+ * One row per person per campaign: a re-entry resets the existing row rather
+ * than adding a second, so `enrolledAt` is always the latest entry and the
+ * re-enrolment guard can read it without a subquery over history.
+ */
+export async function enrol(input: {
+  campaignId: string;
+  dealId: string;
+  actorUserId?: string;
+  agentId?: string;
+}): Promise<CampaignEnrolment> {
+  const now = new Date();
+  const [row] = await db
+    .insert(campaignEnrolments)
+    .values({
+      id: `enr-${crypto.randomUUID().slice(0, 8)}`,
+      campaignId: input.campaignId,
+      dealId: input.dealId,
+      enrolledAt: now,
+      currentStep: 1,
+      state: "active",
+      exitReason: null,
+    })
+    .onConflictDoUpdate({
+      target: [campaignEnrolments.campaignId, campaignEnrolments.dealId],
+      set: {
+        enrolledAt: now,
+        currentStep: 1,
+        state: "active",
+        exitReason: null,
+      },
+    })
+    .returning();
+
+  await appendAudit({
+    entity: "campaign_enrolment",
+    entityId: row.id,
+    action: "enrol",
+    userId: input.actorUserId ?? null,
+    agentId: input.actorUserId ? null : (input.agentId ?? null),
+    before: null,
+    after: { campaignId: input.campaignId, dealId: input.dealId },
+  });
+
+  return toEnrolment(row);
+}
+
+export async function advanceEnrolment(input: {
+  enrolmentId: string;
+  toStep: number;
+  actorUserId?: string;
+  agentId?: string;
+}): Promise<void> {
+  const [before] = await db
+    .select()
+    .from(campaignEnrolments)
+    .where(eq(campaignEnrolments.id, input.enrolmentId))
+    .limit(1);
+  if (!before) throw new Error(`Enrolment "${input.enrolmentId}" not found.`);
+
+  await db
+    .update(campaignEnrolments)
+    .set({ currentStep: input.toStep })
+    .where(eq(campaignEnrolments.id, input.enrolmentId));
+
+  await appendAudit({
+    entity: "campaign_enrolment",
+    entityId: input.enrolmentId,
+    action: "advance",
+    userId: input.actorUserId ?? null,
+    agentId: input.actorUserId ? null : (input.agentId ?? null),
+    before: { currentStep: before.currentStep },
+    after: { currentStep: input.toStep },
+  });
+}
+
+/** Leaving early — booked, unsubscribed, or no longer in the audience. */
+export async function exitEnrolment(input: {
+  enrolmentId: string;
+  reason: string;
+  state?: "completed" | "exited";
+  actorUserId?: string;
+  agentId?: string;
+}): Promise<void> {
+  const [before] = await db
+    .select()
+    .from(campaignEnrolments)
+    .where(eq(campaignEnrolments.id, input.enrolmentId))
+    .limit(1);
+  if (!before) throw new Error(`Enrolment "${input.enrolmentId}" not found.`);
+
+  const state = input.state ?? "exited";
+  await db
+    .update(campaignEnrolments)
+    .set({ state, exitReason: input.reason })
+    .where(eq(campaignEnrolments.id, input.enrolmentId));
+
+  await appendAudit({
+    entity: "campaign_enrolment",
+    entityId: input.enrolmentId,
+    action: state === "completed" ? "complete" : "exit",
+    userId: input.actorUserId ?? null,
+    agentId: input.actorUserId ? null : (input.agentId ?? null),
+    before: { state: before.state },
+    after: { state, reason: input.reason },
+  });
+}
+
+/**
+ * Marks a step sent. The unique constraint on (enrolment, step) is the
+ * idempotency guarantee — a second run the same morning conflicts rather than
+ * sending twice, so this is deliberately not an upsert.
+ */
+export async function recordSend(input: {
+  enrolmentId: string;
+  stepNumber: number;
+  sentOn: Date;
+}): Promise<void> {
+  await db
+    .insert(campaignSends)
+    .values({
+      id: `snd-${crypto.randomUUID().slice(0, 8)}`,
+      enrolmentId: input.enrolmentId,
+      stepNumber: input.stepNumber,
+      sentOn: isoDate(input.sentOn),
+    })
+    .onConflictDoNothing();
+}
+
+/** What has already gone out on a given day, for the replay guard. */
+export async function getSendsOn(
+  date: Date,
+): Promise<{ enrolmentId: string; stepNumber: number }[]> {
+  const rows = await db
+    .select({
+      enrolmentId: campaignSends.enrolmentId,
+      stepNumber: campaignSends.stepNumber,
+    })
+    .from(campaignSends)
+    .where(eq(campaignSends.sentOn, isoDate(date)));
+  return rows;
+}
+
+function isoDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function toEnrolment(
+  row: typeof campaignEnrolments.$inferSelect,
+): CampaignEnrolment {
+  return {
+    id: row.id,
+    campaignId: row.campaignId,
+    dealId: row.dealId,
+    enrolledAt: row.enrolledAt,
+    currentStep: row.currentStep,
+    state: row.state as CampaignEnrolment["state"],
+    exitReason: row.exitReason,
+  };
+}
+
+/* -------------------------------------------------------------------------
+   Job ingest
+   ------------------------------------------------------------------------- */
+
+export interface UpsertCompletedJobInput {
+  /** The Funnel's own id. The idempotency key — a retry must not add a row. */
+  wowOsJobId: string;
+  accountId: string;
+  dealId?: string | null;
+  completedAt: Date;
+  workType: string;
+  scope?: string;
+  areas?: string[];
+  valueCents: number;
+  crew?: string | null;
+  actorUserId?: string;
+  agentId?: string;
+}
+
+/**
+ * Records a completed job from the Funnel.
+ *
+ * Conflicts on `wowOsJobId`, not on our own key: a retried webhook must update
+ * the row it already wrote. A duplicate here is not a duplicate row, it is a
+ * second review request to a customer who already got one.
+ */
+export async function upsertCompletedJob(
+  input: UpsertCompletedJobInput,
+): Promise<{ id: string; created: boolean }> {
+  const [existing] = await db
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(eq(jobs.wowOsJobId, input.wowOsJobId))
+    .limit(1);
+
+  const id = existing?.id ?? `job-${crypto.randomUUID().slice(0, 8)}`;
+  const values = {
+    id,
+    wowOsJobId: input.wowOsJobId,
+    accountId: input.accountId,
+    dealId: input.dealId ?? null,
+    completedAt: input.completedAt,
+    workType: input.workType,
+    scope: input.scope ?? "",
+    areas: input.areas ?? [],
+    valueCents: input.valueCents,
+    crew: input.crew ?? null,
+  };
+
+  await db
+    .insert(jobs)
+    .values(values)
+    .onConflictDoUpdate({ target: jobs.wowOsJobId, set: values });
+
+  await appendAudit({
+    entity: "job",
+    entityId: id,
+    action: existing ? "ingest.update" : "ingest.create",
+    userId: input.actorUserId ?? null,
+    agentId: input.actorUserId ? null : (input.agentId ?? "wow-os-funnel"),
+    before: existing ? { id: existing.id } : null,
+    after: { wowOsJobId: input.wowOsJobId, completedAt: input.completedAt },
+  });
+
+  return { id, created: !existing };
+}
+
+/**
+ * How many completions we hold, and how many actually came from the Funnel.
+ *
+ * `hasJobCompletions` answers "can this audience be evaluated". This answers
+ * the different question the UI should be honest about: the Funnel does not
+ * send completions yet, so every row today is seeded. A screen that says
+ * "5 completed jobs" without saying where they came from implies an
+ * integration that does not exist.
+ */
+export async function getJobCompletionStats(): Promise<{
+  total: number;
+  fromFunnel: number;
+}> {
+  const rows = await db.select({ wowOsJobId: jobs.wowOsJobId }).from(jobs);
+  return {
+    total: rows.length,
+    fromFunnel: rows.filter(
+      (r) => r.wowOsJobId && !r.wowOsJobId.startsWith("seed:"),
+    ).length,
+  };
 }

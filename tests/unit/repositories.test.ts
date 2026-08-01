@@ -18,6 +18,12 @@ import {
   unknownTokens,
 } from "@/lib/templates/resolve";
 import type { MessageTemplate } from "@/lib/templates/types";
+import {
+  CAMPAIGN_FIXTURES,
+  CAMPAIGN_STEP_FIXTURES,
+  JOB_FIXTURES,
+} from "@/lib/fixtures/campaigns";
+import { audienceMatches } from "@/lib/campaigns/audience";
 import type { PipelineId } from "@/lib/types";
 import {
   AGENT_NAMES,
@@ -705,6 +711,90 @@ describe("shipped message templates", () => {
         id: t.id,
         ai: false,
       });
+    }
+  });
+});
+
+
+describe("campaigns and the jobs they read", () => {
+  const now = new Date(2026, 7, 1, 12, 0, 0);
+  const factsFor = (j: (typeof JOB_FIXTURES)[number]) => ({
+    jobCompletedAt:
+      j.completedAt ?? new Date(now.getTime() - (j.completedDaysAgo ?? 0) * 86_400_000),
+    tags: [],
+    pipelineId: "resi" as const,
+    stageId: "past",
+    lastEnrolledAt: null,
+  });
+
+  it("gives the seeded review campaign somebody to select", () => {
+    // The coupling that is invisible with the jobs inside a script: a campaign
+    // timed "4 days after the job" is only a demo if a job finished four days
+    // ago. Change either number and this fails rather than the screen quietly
+    // showing an empty list.
+    const review = CAMPAIGN_FIXTURES.find((c) => c.id === "camp-review")!;
+    expect(review.audienceKind).toBe("job_completed_days_ago");
+
+    const selected = JOB_FIXTURES.filter((j) =>
+      audienceMatches(
+        { kind: "job_completed_days_ago", params: review.audienceParams },
+        factsFor(j),
+        now,
+      ),
+    );
+    expect(selected.map((j) => j.id)).toEqual(["job-r3"]);
+  });
+
+  it("ships every campaign disarmed", () => {
+    // A campaign that starts sending the moment it is seeded is not a demo.
+    for (const c of CAMPAIGN_FIXTURES) {
+      expect({ id: c.id, active: c.active }).toEqual({ id: c.id, active: false });
+    }
+  });
+
+  it("defaults to per-message approval", () => {
+    // Bulk is the mode where somebody approves what they have not read in
+    // full. Opting into that is a decision, never a default.
+    for (const c of CAMPAIGN_FIXTURES) {
+      expect(c.approvalMode).toBe("per_message");
+    }
+  });
+
+  it("guards every campaign against re-enrolling the same customer", () => {
+    // The exact-day audience re-qualifies people daily; without a window the
+    // guard is the only thing between a customer and a nag.
+    for (const c of CAMPAIGN_FIXTURES) {
+      expect(c.reenrolAfterDays).not.toBeNull();
+    }
+  });
+
+  it("gives every step a campaign that exists, numbered from one", () => {
+    const ids = new Set(CAMPAIGN_FIXTURES.map((c) => c.id));
+    for (const c of CAMPAIGN_FIXTURES) {
+      const steps = CAMPAIGN_STEP_FIXTURES.filter((s) => s.campaignId === c.id);
+      expect(steps.length).toBeGreaterThan(0);
+      expect(steps.map((s) => s.stepNumber)).toEqual(
+        steps.map((_, i) => i + 1),
+      );
+    }
+    for (const s of CAMPAIGN_STEP_FIXTURES) expect(ids.has(s.campaignId)).toBe(true);
+  });
+
+  it("dates every job either relatively or absolutely, never both", () => {
+    for (const j of JOB_FIXTURES) {
+      const relative = j.completedDaysAgo !== undefined;
+      const absolute = j.completedAt !== undefined;
+      expect({ id: j.id, one: relative !== absolute }).toEqual({
+        id: j.id,
+        one: true,
+      });
+    }
+  });
+
+  it("records job money in cents so it is never a float", () => {
+    for (const j of JOB_FIXTURES) {
+      expect(Number.isInteger(j.valueCents)).toBe(true);
+      expect(j.valueCents).toBeGreaterThan(0);
     }
   });
 });

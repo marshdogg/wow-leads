@@ -6,6 +6,7 @@ import {
   approvals,
   contacts,
   deals,
+  jobs,
   canvassTargets,
   promos,
   sequenceSteps,
@@ -78,6 +79,7 @@ type SequenceRow = typeof sequences.$inferSelect;
 type SequenceStepRow = typeof sequenceSteps.$inferSelect;
 type ApprovalRow = typeof approvals.$inferSelect;
 type CanvassTargetRow = typeof canvassTargets.$inferSelect;
+type JobRow = typeof jobs.$inferSelect;
 
 export interface FactContext {
   now: Date;
@@ -92,6 +94,16 @@ export interface FactContext {
   approvalsByDeal: Map<string, ApprovalRow[]>;
   /** Addresses to canvass, keyed by the job whose crew the neighbours can see. */
   canvassByDeal: Map<string, CanvassTargetRow[]>;
+  /**
+   * Completed jobs by account, newest first.
+   *
+   * `jobs` is the source of job **facts**; the JOB touchpoint is the source of
+   * job **narrative**. They answer different questions — the row carries the
+   * timestamp, work type and areas that copy and campaigns are computed from,
+   * the touchpoint renders on the Record timeline. The touchpoint is not for
+   * parsing, and the prose fallback below is temporary.
+   */
+  jobsByAccount: Map<string, JobRow[]>;
 }
 
 export async function loadFactContext(now: Date): Promise<FactContext> {
@@ -117,6 +129,7 @@ export async function loadFactContext(now: Date): Promise<FactContext> {
     stepRows,
     approvalRows,
     canvassRows,
+    jobRows,
   ] = await Promise.all([
     accountIds.length
       ? db.select().from(accounts).where(inArray(accounts.id, accountIds))
@@ -154,6 +167,13 @@ export async function loadFactContext(now: Date): Promise<FactContext> {
           .from(canvassTargets)
           .where(inArray(canvassTargets.sourceDealId, dealIds))
       : [],
+    accountIds.length
+      ? db
+          .select()
+          .from(jobs)
+          .where(inArray(jobs.accountId, accountIds))
+          .orderBy(asc(jobs.completedAt))
+      : [],
   ]);
 
   return {
@@ -168,6 +188,7 @@ export async function loadFactContext(now: Date): Promise<FactContext> {
     stepsBySequence: groupBy(stepRows, (r) => r.sequenceId),
     approvalsByDeal: groupBy(approvalRows, (r) => r.dealId),
     canvassByDeal: groupBy(canvassRows, (r) => r.sourceDealId),
+    jobsByAccount: groupBy(jobRows, (r) => r.accountId),
   };
 }
 
@@ -268,13 +289,16 @@ function workTypeOf(deal: DealRow): string {
 function scopeFacts(
   ctx: FactContext,
   deal: DealRow,
-  job?: TouchpointRow,
+  jobEvent?: TouchpointRow,
+  job?: JobRow,
 ): ScopeFacts {
-  // What the completion record says was painted beats what the card is
-  // tagged: the tag describes the account, the JOB row describes the job.
-  const workType = jobWorkType(job) ?? workTypeOf(deal);
-  // What this job actually covered beats what the account generally is.
-  const areas = jobScopeAreas(job);
+  // Columns first, then the completion prose, then the card's tag. The tag is
+  // last because it describes the *account* — r8 is tagged INTERIOR while its
+  // job was an exterior repaint, and trusting the tag told the neighbours we
+  // had painted the inside of a house whose outside they watched us paint.
+  const workType = job?.workType ?? jobWorkType(jobEvent) ?? workTypeOf(deal);
+  const areas =
+    job?.areas && job.areas.length > 0 ? job.areas : jobScopeAreas(jobEvent);
   return {
     summary: `${workType.charAt(0).toUpperCase()}${workType.slice(1)} repaint`,
     workType,
@@ -298,6 +322,20 @@ export function scopeAreas(ctx: FactContext, deal: DealRow): string[] {
   return splitAreas(detail?.value);
 }
 
+/**
+ * The most recent completed job, from `jobs` where it exists.
+ *
+ * The JOB-touchpoint path behind it is a migration fallback and goes when the
+ * last account is backfilled — along with `completionEvent` and
+ * `isCompletionRecord`, whose prose heuristic only ever existed because
+ * `bookDeal` writes estimate bookings on the same channel. A regex kept as a
+ * second opinion behind an authoritative column is a liability, not a net.
+ */
+function latestJob(ctx: FactContext, deal: DealRow): JobRow | undefined {
+  const rows = deal.accountId ? (ctx.jobsByAccount.get(deal.accountId) ?? []) : [];
+  return rows.length ? rows[rows.length - 1] : undefined;
+}
+
 /* -------------------------------------------------------------------------
    11-month warranty
    ------------------------------------------------------------------------- */
@@ -309,8 +347,10 @@ export function elevenMonthFacts(
   if (deal.pipelineId !== "resi") return null;
 
   const events = dealTouchpoints(ctx, deal);
+  const job = latestJob(ctx, deal);
   const jobEvent = completionEvent(events);
   const jobCompletedAt =
+    job?.completedAt ??
     jobEvent?.occurredAt ??
     parseMonthYear(metricValue(deal, "COMPLETED")) ??
     (deal.stale.includes("since job")
@@ -335,7 +375,7 @@ export function elevenMonthFacts(
     jobCompletedAt,
     completionFollowUpAt: followUp,
     lastContactAt: lastHumanContactAt(ctx, deal),
-    scope: scopeFacts(ctx, deal, jobEvent),
+    scope: scopeFacts(ctx, deal, jobEvent, job),
     replies: replyFacts(ctx, deal),
     now: ctx.now,
   };
@@ -648,8 +688,9 @@ export function neighbourCampaignFacts(
   if (targets.length === 0) return [];
 
   const events = dealTouchpoints(ctx, deal);
+  const job = latestJob(ctx, deal);
   const jobEvent = completionEvent(events);
-  if (!jobEvent) return [];
+  if (!job && !jobEvent) return [];
 
   const jobAddress = deal.accountLine;
   if (!jobAddress) return [];
@@ -658,8 +699,8 @@ export function neighbourCampaignFacts(
   const details = account?.details ?? [];
   const known = knownAddresses(ctx);
   const contact = contactFacts(ctx, deal);
-  const scope = scopeFacts(ctx, deal, jobEvent);
-  const crew = crewName(details);
+  const scope = scopeFacts(ctx, deal, jobEvent, job);
+  const crew = job?.crew ?? crewName(details);
   const onSiteUntil = crewOnSiteUntil(details, ctx.now);
 
   return targets.map((target) => ({
@@ -670,7 +711,7 @@ export function neighbourCampaignFacts(
     // rather than borrowing the neighbour's name.
     contact: { ...contact, name: "", firstName: "", address: target.address },
     jobAddress,
-    jobCompletedAt: jobEvent.occurredAt,
+    jobCompletedAt: job?.completedAt ?? jobEvent!.occurredAt,
     scope,
     crewName: crew,
     crewOnSiteUntil: onSiteUntil,

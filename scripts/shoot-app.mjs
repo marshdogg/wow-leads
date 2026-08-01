@@ -28,6 +28,8 @@ const DESKTOP_ROUTES = [
   { name: "record", path: "/record/r1" },
   { name: "manager", path: "/manager" },
   { name: "switcher", path: "/switcher" },
+  { name: "templates", path: "/templates" },
+  { name: "campaigns", path: "/campaigns" },
 ];
 
 /**
@@ -41,6 +43,8 @@ const PHONE_ROUTES = [
   { name: "record-390", path: "/record/r1" },
   { name: "manager-390", path: "/manager" },
   { name: "board-390", path: "/board?pipeline=resi&view=board" },
+  { name: "templates-390", path: "/templates" },
+  { name: "campaigns-390", path: "/campaigns" },
 ];
 
 /**

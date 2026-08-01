@@ -9,7 +9,13 @@
  */
 
 import { config } from "dotenv";
-import { getTableColumns, inArray, notInArray, sql, type SQL } from "drizzle-orm";
+import {
+  getTableColumns,
+  inArray,
+  notInArray,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
 import type { PgTable, PgUpdateSetSource } from "drizzle-orm/pg-core";
@@ -18,6 +24,11 @@ import * as schema from "@/db/schema";
 import { LOCATIONS, SWITCHABLE_USERS } from "@/lib/current-user";
 import { APPROVAL_FIXTURES } from "@/lib/fixtures/approvals";
 import { TEMPLATE_FIXTURES } from "@/lib/fixtures/templates";
+import {
+  CAMPAIGN_FIXTURES,
+  CAMPAIGN_STEP_FIXTURES,
+  JOB_FIXTURES,
+} from "@/lib/fixtures/campaigns";
 import {
   AGENT_ID_BY_OWNER_NAME,
   DEAL_FIXTURES,
@@ -403,18 +414,13 @@ function neighbourMetrics(d: DealFixture): DealMetric[] {
     m.label === "NEIGHBOUR OF"
       ? {
           label: m.label,
-          value:
-            JOB_REFERENCE[d.sourcedFromDealId!] ?? d.sourcedFromDealId!,
+          value: JOB_REFERENCE[d.sourcedFromDealId!] ?? d.sourcedFromDealId!,
         }
       : m,
   );
 }
 
-function dealRow(
-  d: DealFixture,
-  latestTouchAt: Date | null,
-  createdAt: Date,
-) {
+function dealRow(d: DealFixture, latestTouchAt: Date | null, createdAt: Date) {
   const isAgent = d.owner.agent;
   const inResult = d.pipe === "resi" && d.stage === "result";
   return {
@@ -427,8 +433,12 @@ function dealRow(
     accountId: accountIdFor(d.id),
     tags: d.tags,
     source: d.source,
-    ownerUserId: isAgent ? null : (OWNER_USER_BY_INITIALS[d.owner.initials] ?? null),
-    ownerAgentId: isAgent ? (AGENT_ID_BY_OWNER_NAME[d.owner.name] ?? null) : null,
+    ownerUserId: isAgent
+      ? null
+      : (OWNER_USER_BY_INITIALS[d.owner.initials] ?? null),
+    ownerAgentId: isAgent
+      ? (AGENT_ID_BY_OWNER_NAME[d.owner.name] ?? null)
+      : null,
     ownerInitials: d.owner.initials,
     ownerName: d.owner.name,
     ownerIsAgent: isAgent,
@@ -579,7 +589,9 @@ function genericTouchpoints(d: DealFixture): TouchpointRow[] {
   const userId = isAgent
     ? null
     : (OWNER_USER_BY_INITIALS[d.owner.initials] ?? null);
-  const agentId = isAgent ? (AGENT_ID_BY_OWNER_NAME[d.owner.name] ?? null) : null;
+  const agentId = isAgent
+    ? (AGENT_ID_BY_OWNER_NAME[d.owner.name] ?? null)
+    : null;
 
   const source: TouchpointRow = {
     id: `tp-${d.id}-3`,
@@ -646,7 +658,11 @@ function genericTouchpoints(d: DealFixture): TouchpointRow[] {
  */
 const NEW_LEAD_ARRIVAL: Record<
   string,
-  { createdDaysAgo: number; body: string; contact?: { channel: string; body: string } }
+  {
+    createdDaysAgo: number;
+    body: string;
+    contact?: { channel: string; body: string };
+  }
 > = {
   n1: {
     // Effectively "just now". A static seed still ages — see the freshness
@@ -901,7 +917,9 @@ const auditRows = DEAL_FIXTURES.map((d) => ({
 
 /** Every touchpoint id the seed has ever owned, current or retired. */
 const seedOwnedTouchpointIds = [
-  ...DEAL_FIXTURES.flatMap((d) => [1, 2, 3, 4, 5].map((n) => `tp-${d.id}-${n}`)),
+  ...DEAL_FIXTURES.flatMap((d) =>
+    [1, 2, 3, 4, 5].map((n) => `tp-${d.id}-${n}`),
+  ),
   ...eventTouchpoints.map((t) => t.id),
 ];
 
@@ -960,142 +978,26 @@ const canvassTargetRows = [
   },
 ];
 
-/**
- * Completed jobs, reconstructed from the job history the cards already show
- * as strings — `LAST JOB $8,400`, `COMPLETED Aug 2025`. Same facts, but as
- * timestamps a campaign can be timed against.
- *
- * Priya's job is **exactly four days back** on purpose: a "4 days after the
- * job" review campaign has to select somebody or the feature demos as an empty
- * list. It also happens to be the most coherent record in the set — we
- * finished her interior, she is now being asked for a referral, and she named
- * a neighbour.
- */
-const jobRows = [
-  {
-    id: "job-r1",
-    accountId: accountIdFor("r1"),
-    dealId: "r1",
-    completedAt: new Date(2025, 7, 21, 17, 0, 0),
-    workType: "interior",
-    scope: "4 rooms, hallway, stairwell",
-    areas: ["hallway", "stairwell"],
-    valueCents: 840_000,
-    crew: "Kris Jolin crew",
-  },
-  {
-    id: "job-r2",
-    accountId: accountIdFor("r2"),
-    dealId: "r2",
-    completedAt: daysAgo(122),
-    workType: "exterior",
-    scope: "Siding and trim",
-    areas: ["siding", "trim"],
-    valueCents: 1_210_000,
-    crew: "Granville Smith crew",
-  },
-  {
-    id: "job-r3",
-    accountId: accountIdFor("r3"),
-    dealId: "r3",
-    completedAt: daysAgo(4),
-    workType: "interior",
-    scope: "2 bedrooms and the landing",
-    areas: ["bedrooms", "landing"],
-    valueCents: 625_000,
-    crew: "Kris Jolin crew",
-  },
-  {
-    id: "job-r4",
-    accountId: accountIdFor("r4"),
-    dealId: "r4",
-    completedAt: new Date(2025, 1, 14, 17, 0, 0),
-    workType: "interior",
-    scope: "Basement and stairwell",
-    areas: ["basement", "stairwell"],
-    valueCents: 490_000,
-    crew: "Craig Merrills crew",
-  },
-  {
-    id: "job-r8",
-    accountId: accountIdFor("r8"),
-    dealId: "r8",
-    completedAt: daysAgo(2),
-    workType: "exterior",
-    scope: "Siding, trim and front door",
-    areas: ["siding", "trim", "front door"],
-    valueCents: 925_000,
-    crew: "Kris Jolin crew",
-  },
-];
+const jobRows = JOB_FIXTURES.map((j) => ({
+  id: j.id,
+  wowOsJobId: j.wowOsJobId,
+  accountId: j.accountId,
+  dealId: j.dealId,
+  completedAt: j.completedAt ?? daysAgo(j.completedDaysAgo ?? 0),
+  workType: j.workType,
+  scope: j.scope,
+  areas: j.areas,
+  valueCents: j.valueCents,
+  crew: j.crew,
+}));
 
-/**
- * Two campaigns, so the screen has something real on it. Both start inactive —
- * a campaign that begins sending the moment it is seeded is not a demo, it is
- * an accident.
- */
-const campaignRows = [
-  {
-    id: "camp-review",
-    name: "Google review request",
-    category: "RESIDENTIAL LEADS",
-    description:
-      "Asks for a review four days after the job finishes — long enough for the paint to look settled, soon enough that they still remember the crew's names.",
-    audienceKind: "job_completed_days_ago",
-    audienceParams: { days: 4 },
-    approvalMode: "per_message",
-    active: false,
-    reenrolAfterDays: 365,
-    authoredBy: "u-marshall",
-    createdAt: NOW,
-    updatedAt: NOW,
-  },
-  {
-    id: "camp-winback",
-    name: "Two-year win-back",
-    category: "RESIDENTIAL LEADS",
-    description:
-      "Customers we have not worked for in two years. The cheapest lead is one who already knows the crew.",
-    audienceKind: "no_job_in_months",
-    audienceParams: { months: 24 },
-    approvalMode: "per_message",
-    active: false,
-    reenrolAfterDays: 365,
-    authoredBy: "u-marshall",
-    createdAt: NOW,
-    updatedAt: NOW,
-  },
-];
+const campaignRows = CAMPAIGN_FIXTURES.map((c) => ({
+  ...c,
+  createdAt: NOW,
+  updatedAt: NOW,
+}));
 
-const campaignStepRows = [
-  {
-    id: "camp-review-s1",
-    campaignId: "camp-review",
-    stepNumber: 1,
-    delayDays: 0,
-    channel: "SMS",
-    templateId: null,
-    label: "Ask for the review",
-  },
-  {
-    id: "camp-review-s2",
-    campaignId: "camp-review",
-    stepNumber: 2,
-    delayDays: 5,
-    channel: "EMAIL",
-    templateId: null,
-    label: "One reminder, then stop",
-  },
-  {
-    id: "camp-winback-s1",
-    campaignId: "camp-winback",
-    stepNumber: 1,
-    delayDays: 0,
-    channel: "EMAIL",
-    templateId: null,
-    label: "Open the conversation",
-  },
-];
+const campaignStepRows = CAMPAIGN_STEP_FIXTURES;
 
 /**
  * Shipped template rows. `order` becomes `updatedAt` — same-scope siblings are
@@ -1302,12 +1204,32 @@ async function main() {
       );
     }
 
+    // Campaigns somebody created in the editor. A new campaign correctly gets
+    // a generated id, so it cannot be upserted away — same shape as the
+    // runtime leads above. Steps, enrolments, sends and queued approvals
+    // cascade off the campaign row.
+    const fixtureCampaignIds = CAMPAIGN_FIXTURES.map((c) => c.id);
+    const strayCampaigns = await db
+      .delete(schema.campaigns)
+      .where(notInArray(schema.campaigns.id, fixtureCampaignIds))
+      .returning({ id: schema.campaigns.id, name: schema.campaigns.name });
+    if (strayCampaigns.length) {
+      console.log(
+        `Cleared ${strayCampaigns.length} campaign(s) created since the last seed: ${strayCampaigns.map((c) => c.name).join(", ")}`,
+      );
+    }
+
     // Approvals the triggers produced since the last seed. The three fixture
     // rows are re-inserted below; anything else is residue that shows as
     // `duplicate` and suppresses the trigger that made it.
     const strayApprovals = await db
       .delete(schema.approvals)
-      .where(notInArray(schema.approvals.id, APPROVAL_FIXTURES.map((a) => a.id)))
+      .where(
+        notInArray(
+          schema.approvals.id,
+          APPROVAL_FIXTURES.map((a) => a.id),
+        ),
+      )
       .returning({ id: schema.approvals.id });
     if (strayApprovals.length) {
       console.log(
@@ -1463,7 +1385,9 @@ async function main() {
     returning d.id, floor(date_part('day', now() - newest.at))::int as days
   `)
     : [];
-  const reconciledRows = Array.isArray(reconciled) ? reconciled : reconciled.rows;
+  const reconciledRows = Array.isArray(reconciled)
+    ? reconciled
+    : reconciled.rows;
   if (reconciledRows.length) {
     console.log(
       `Pulled last_touch_at forward on ${reconciledRows.length} deal(s) with activity newer than the fixtures: ` +
@@ -1499,7 +1423,11 @@ async function main() {
 
   // The invariant the Manager dashboard depends on: no deal may claim a
   // last-touch older than something sitting in its own timeline.
-  const drift = await db.execute<{ id: string; last_touch_at: string; newest: string }>(sql`
+  const drift = await db.execute<{
+    id: string;
+    last_touch_at: string;
+    newest: string;
+  }>(sql`
     select d.id, d.last_touch_at, n.at as newest
       from deals d
       join (select deal_id, max(occurred_at) as at
@@ -1517,7 +1445,9 @@ async function main() {
     );
     process.exit(1);
   }
-  console.log("\n  last_touch_at agrees with the newest touchpoint on every deal.");
+  console.log(
+    "\n  last_touch_at agrees with the newest touchpoint on every deal.",
+  );
 
   // The one thing in this dataset that expires. Everything else is measured in
   // days or months and survives a long demo; the speed-to-lead pair is
@@ -1529,6 +1459,123 @@ async function main() {
   const mm = String(slaExpiresAt.getMinutes()).padStart(2, "0");
   console.log(
     `  New Leads SLA: n1 reads as on-track until ~${hh}:${mm} local. Re-seed if you demo after that.`,
+  );
+
+  await assertAudienceSelectionAgrees();
+  await assertFixtureCountsExact();
+}
+
+/**
+ * Fixture-owned tables must hold exactly what the fixtures describe.
+ *
+ * The counts are printed above, but nothing read them — and a row quietly
+ * duplicating on every run is invisible in a number you have to remember from
+ * last time. This is the assertion that makes a re-run self-checking rather
+ * than something a person has to diff by eye. Skipped under
+ * `--keep-activity`, where extra rows are the point.
+ */
+async function assertFixtureCountsExact() {
+  if (KEEP_ACTIVITY) return;
+
+  const expected: Record<string, number> = {
+    deals: DEAL_FIXTURES.length,
+    accounts: DEAL_FIXTURES.length,
+    campaigns: CAMPAIGN_FIXTURES.length,
+    campaign_steps: CAMPAIGN_STEP_FIXTURES.length,
+    jobs: JOB_FIXTURES.length,
+    templates: TEMPLATE_FIXTURES.length,
+    approvals: APPROVAL_FIXTURES.length,
+    canvass_targets: canvassTargetRows.length,
+    pipelines: PIPELINE_IDS.length,
+  };
+
+  const counted = await db.execute<{ table_name: string; n: number }>(sql`
+    select 'deals' as table_name, count(*)::int as n from deals
+    union all select 'accounts', count(*)::int from accounts
+    union all select 'campaigns', count(*)::int from campaigns
+    union all select 'campaign_steps', count(*)::int from campaign_steps
+    union all select 'jobs', count(*)::int from jobs
+    union all select 'templates', count(*)::int from templates
+    union all select 'approvals', count(*)::int from approvals
+    union all select 'canvass_targets', count(*)::int from canvass_targets
+    union all select 'pipelines', count(*)::int from pipelines
+  `);
+  const rows = Array.isArray(counted) ? counted : counted.rows;
+
+  const wrong = rows.filter((r) => r.n !== expected[r.table_name]);
+  if (wrong.length) {
+    console.error("\nFAILED invariant: fixture-owned tables hold unexpected rows.");
+    for (const r of wrong) {
+      const delta = r.n - expected[r.table_name];
+      console.error(
+        `  ${r.table_name}: ${r.n}, expected ${expected[r.table_name]} (${delta > 0 ? "+" : ""}${delta}) — a duplicating fixture or an unswept runtime row`,
+      );
+    }
+    process.exit(1);
+  }
+  console.log(
+    `  Fixture tables hold exactly what the fixtures describe (${rows.length} checked).`,
+  );
+}
+
+/**
+ * The editor counts an audience client-side with `audienceMatches`; the runner
+ * selects with SQL. They have to agree, and a drift between them is invisible
+ * — the screen would promise "selects 47 people" and a different 47 would get
+ * contacted. Checked here rather than by hand, because the seed runs in CI
+ * before the e2e suite.
+ */
+async function assertAudienceSelectionAgrees() {
+  const { getAudienceDealIds, getAudienceCandidates } = await import(
+    "@/lib/repositories/campaigns"
+  );
+  const { audienceMatches, mayReenrol } = await import(
+    "@/lib/campaigns/audience"
+  );
+
+  const now = new Date();
+  const candidates = await getAudienceCandidates();
+  const cases = [
+    { audience: { kind: "job_completed_days_ago", params: { days: 4 } }, reenrol: 365 },
+    { audience: { kind: "job_completed_days_ago", params: { days: 2 } }, reenrol: null },
+    { audience: { kind: "no_job_in_months", params: { months: 3 } }, reenrol: null },
+    { audience: { kind: "no_job_in_months", params: { months: 24 } }, reenrol: 365 },
+    { audience: { kind: "tagged", params: { tag: "DIRECT HOMEOWNER" } }, reenrol: null },
+    { audience: { kind: "tagged", params: { tag: "INDUSTRY PARTNER" } }, reenrol: 30 },
+    { audience: { kind: "pipeline_stage", params: { pipelineId: "resi", stageId: "past" } }, reenrol: null },
+    { audience: { kind: "pipeline_stage", params: { pipelineId: "newleads", stageId: "new" } }, reenrol: null },
+  ] as const;
+
+  const drift: string[] = [];
+  for (const { audience, reenrol } of cases) {
+    const viaSql = new Set(await getAudienceDealIds(audience, reenrol, now));
+    const viaPredicate = new Set(
+      candidates
+        .filter(
+          (c) =>
+            audienceMatches(audience, c, now) && mayReenrol(c, reenrol, now),
+        )
+        .map((c) => c.dealId),
+    );
+    const same =
+      viaSql.size === viaPredicate.size &&
+      [...viaSql].every((id) => viaPredicate.has(id));
+    if (!same) {
+      drift.push(
+        `${JSON.stringify(audience)} sql=[${[...viaSql].sort()}] predicate=[${[...viaPredicate].sort()}]`,
+      );
+    }
+  }
+
+  if (drift.length) {
+    console.error(
+      `\nFAILED invariant: SQL audience selection disagrees with audienceMatches on ${drift.length} case(s):`,
+    );
+    for (const d of drift) console.error(`  ${d}`);
+    process.exit(1);
+  }
+  console.log(
+    `  Audience selection: SQL and audienceMatches agree on all ${cases.length} cases.`,
   );
 }
 

@@ -90,6 +90,51 @@ ships an in-memory implementation. Swapping in the real Funnel API is a one-file
 interface, return it from `getWowOsClient()`. That file's header documents exactly what must change and
 which environment variables a real integration needs. Nothing outside `lib/wow-os/` talks to the Funnel.
 
+### Job completions — the one integration WOW OS still owes us
+
+Post-job campaigns (a Google-review ask four days after the work finishes) need to know **when a job
+finished**, as a timestamp. The job facts already on a card are display strings — `LAST JOB $8,400`,
+`COMPLETED Aug 2025` — which render fine and cannot schedule anything.
+
+**The endpoint for this is built. Nothing calls it yet.** Every row in the `jobs` table today was written by
+`pnpm seed`. A populated table is not evidence the integration is live. Because of that, the job-based
+audiences report themselves as unavailable in the Campaigns editor rather than silently selecting nobody —
+see `audienceIsSupported()`.
+
+There are two paths in, and WOW OS should build the first:
+
+1. **Webhook (preferred).** `POST /api/wow-os/job-completed`, authenticated with
+   `Authorization: Bearer $WOW_OS_WEBHOOK_SECRET`. A review request four days after completion is only as
+   punctual as the news of the completion. The full contract — payload, field semantics, response codes,
+   retry rules — is the header comment of **`lib/wow-os/jobs.ts`**. That file is the thing to hand to
+   whoever builds the Funnel side.
+2. **Pull (backstop).** `WowOsClient.listCompletedJobs(since)`, run from the daily cron. A webhook that is
+   never delivered is lost silently, and the symptom is a campaign that just never fires for one customer.
+   The pull reconciles within a day. Both paths converge on the same row.
+
+Redelivery is safe: the endpoint is idempotent on the Funnel's own `jobId`, held in `jobs.wow_os_job_id`
+under a unique index, so a retried webhook updates the row it already wrote and returns `created:false`. It
+cannot produce a second row, and therefore cannot produce a second review request. Retry on any 5xx or
+timeout; do not retry a 400.
+
+Seeded completions carry a `seed:` prefix on that column and Funnel-delivered ones do not, which is what
+lets `getJobCompletionStats()` answer "how many of these are real" — a screen can then say *5 completions,
+none live yet* rather than implying an integration that does not exist. The prefix is reserved: a webhook
+sending a `jobId` starting `seed:` is rejected.
+
+To exercise ingest locally:
+
+```bash
+WOW_OS_WEBHOOK_SECRET=dev-ingest pnpm dev
+curl -X POST localhost:3000/api/wow-os/job-completed \
+  -H "Authorization: Bearer dev-ingest" -H "Content-Type: application/json" \
+  -d '{"jobId":"WO-99001","accountId":"acct-r3","completedAt":"2026-07-28T16:40:00Z",
+       "workType":"interior","scope":"4 rooms","areas":["hallway"],"valueCents":840000}'
+```
+
+First call returns `{"ok":true,"jobId":"WO-99001","id":"job-29a91384","created":true}`; every repeat returns
+the same `id` with `created:false`.
+
 ### Layout
 
 ```
@@ -100,7 +145,7 @@ components/         board, card, list, booking, field, record, manager, shell
 db/                 Drizzle schema and migrations
 lib/repositories/   the only code that reads or writes the database
 lib/triggers/       the four trigger predicates, drafters, and the daily runner
-lib/wow-os/         the Funnel adapter and pure booking helpers
+lib/wow-os/         the Funnel adapter, booking helpers, job-completion ingest
 lib/pipelines.ts    pipeline and stage configuration
 tests/              unit (Vitest) and e2e (Playwright)
 ```
@@ -136,9 +181,15 @@ after a refresh.
 
 Deploys to Vercel from the repository root; the project is already linked via `.vercel/`.
 
-Set `DATABASE_URL`, `DATABASE_URL_UNPOOLED` and `CRON_SECRET` on the Vercel project for Production, Preview
-and Development. `ANTHROPIC_API_KEY` is optional, as above. Run `pnpm db:migrate` and `pnpm seed` against the
-production database once, locally, with the production connection string.
+Set `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `CRON_SECRET` and `WOW_OS_WEBHOOK_SECRET` on the Vercel project
+for Production, Preview and Development. `ANTHROPIC_API_KEY` is optional, as above. Run `pnpm db:migrate` and
+`pnpm seed` against the production database once, locally, with the production connection string.
+
+> **Known gap: `CRON_SECRET` is set on Production but not on Preview** — the Vercel CLI rejects its own
+> suggested command for adding it, so it has to go in through the dashboard (Project → Settings →
+> Environment Variables → tick Preview). Until then Preview deploys 401 the cron route. That is the safe
+> direction to fail, but it means a Preview URL cannot smoke-test a trigger run. `WOW_OS_WEBHOOK_SECRET`
+> will behave the same way, for the same reason — set both in the same visit.
 
 `vercel.json` pins functions to `iad1` — the same region as the Neon database, which keeps every query on a
 short hop — and registers the daily cron:

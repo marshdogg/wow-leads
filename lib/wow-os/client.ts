@@ -32,21 +32,29 @@
  *      and it stays exactly as it is after the swap.
  *   4. Map WOW Leads deal ids to Funnel deal ids if the Funnel does not accept
  *      ours. Add the mapping here, not in the caller.
+ *   5. Make `listCompletedJobs` query the *Funnel*. `DbJobStore` reads our own
+ *      `jobs` table, which is right for an in-memory adapter and wrong for a
+ *      real one: the method exists to reconcile against missed webhooks, and a
+ *      mirror cannot reconcile against itself.
  *
- * Environment variables a real integration will need (none are set today, and
- * none are read by the in-memory adapter):
+ * Environment variables a real integration will need (none of the first three
+ * are set today, and none are read by the in-memory adapter):
  *   WOW_OS_API_URL       Base URL of the Funnel API.
  *   WOW_OS_API_TOKEN     Service token for the WOW Leads → Funnel machine user.
  *   WOW_OS_LOCATION_ID   Which location's Funnel to write into; today the app
  *                        is single-location (see `lib/current-user.ts`).
+ *   WOW_OS_WEBHOOK_SECRET  Already wired: the shared secret the Funnel presents
+ *                        to `POST /api/wow-os/job-completed`. This one is real
+ *                        code with no caller yet — see `lib/wow-os/jobs.ts`.
  * Add them to `.env.example` when you add them here.
  *
  * `getWowOsClient()` already switches on `WOW_OS_API_URL`, so wiring the real
  * client up is: implement the class, set the env vars, ship.
  */
 
-import { eq } from "drizzle-orm";
-import { deals } from "@/db/schema";
+import { asc, eq, gte } from "drizzle-orm";
+import { deals, jobs } from "@/db/schema";
+import type { CompletedJob } from "@/lib/campaigns/types";
 import { generateOsRef, isValidOsRef } from "./booking";
 
 /**
@@ -98,6 +106,20 @@ export interface WowOsClient {
    * round trip always succeeds.
    */
   getEstimateStatus(osRef: string): Promise<EstimateRecord | null>;
+  /**
+   * Every job the Funnel finished at or after `since`, oldest first.
+   *
+   * The reconciliation half of job-completion ingest. The webhook in
+   * `app/api/wow-os/job-completed/` is the low-latency path and the one WOW OS
+   * should build first; this is the backstop that catches anything the webhook
+   * never delivered — a deploy window, a rotated secret, an outage — because a
+   * lost completion is otherwise silent, and the symptom is a campaign that
+   * simply never fires for one customer. Both converge on the same row.
+   *
+   * `since` is exclusive of nothing: pass the newest completion already stored
+   * and re-upserting the boundary row is harmless, which is the point.
+   */
+  listCompletedJobs(since: Date): Promise<CompletedJob[]>;
 }
 
 
@@ -188,6 +210,65 @@ export class DbEstimateStore implements EstimateStore {
   }
 }
 
+/* -------------------------------------------------------------------------
+   Completed jobs
+   ------------------------------------------------------------------------- */
+
+/**
+ * Where `listCompletedJobs` reads from.
+ *
+ * Separate from `EstimateStore` because it is a separate concern: estimates go
+ * out to the Funnel, completions come back. A real integration deletes both —
+ * see the file header — but they would not be replaced by the same call.
+ */
+export interface JobStore {
+  listCompletedJobsSince(since: Date): Promise<CompletedJob[]>;
+}
+
+/**
+ * Reads the `jobs` table.
+ *
+ * REAL-INTEGRATION NOTE: today this reads what the webhook and the seed wrote
+ * into our own database, which makes `listCompletedJobs` a read of our mirror
+ * rather than a call to the Funnel. That is the correct behaviour for an
+ * in-memory adapter and the wrong behaviour for a real one: `HttpWowOsClient`
+ * must query the Funnel itself, or the "backstop for missed webhooks" argument
+ * collapses — a mirror cannot reconcile against itself.
+ */
+export class DbJobStore implements JobStore {
+  async listCompletedJobsSince(since: Date): Promise<CompletedJob[]> {
+    const db = await database();
+    const rows = await db
+      .select()
+      .from(jobs)
+      .where(gte(jobs.completedAt, since))
+      .orderBy(asc(jobs.completedAt));
+
+    return rows.map((r) => ({
+      id: r.id,
+      accountId: r.accountId,
+      dealId: r.dealId,
+      completedAt: r.completedAt,
+      workType: r.workType,
+      scope: r.scope,
+      areas: r.areas,
+      valueCents: r.valueCents,
+      crew: r.crew,
+    }));
+  }
+}
+
+/** Job store for unit tests. */
+export class MemoryJobStore implements JobStore {
+  constructor(private readonly rows: CompletedJob[] = []) {}
+
+  async listCompletedJobsSince(since: Date): Promise<CompletedJob[]> {
+    return this.rows
+      .filter((j) => j.completedAt.getTime() >= since.getTime())
+      .sort((a, b) => a.completedAt.getTime() - b.completedAt.getTime());
+  }
+}
+
 /** Store used by unit tests and by any caller that must not touch Postgres. */
 export class MemoryEstimateStore implements EstimateStore {
   private readonly rows = new Map<string, StoredEstimate>();
@@ -209,7 +290,14 @@ export class MemoryEstimateStore implements EstimateStore {
    ------------------------------------------------------------------------- */
 
 export class InMemoryWowOsClient implements WowOsClient {
-  constructor(private readonly store: EstimateStore = new DbEstimateStore()) {}
+  constructor(
+    private readonly store: EstimateStore = new DbEstimateStore(),
+    private readonly jobStore: JobStore = new DbJobStore(),
+  ) {}
+
+  async listCompletedJobs(since: Date): Promise<CompletedJob[]> {
+    return this.jobStore.listCompletedJobsSince(since);
+  }
 
   async createEstimate(
     input: CreateEstimateInput,

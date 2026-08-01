@@ -5,6 +5,13 @@ import {
   stepIsDue,
   type CandidateFacts,
 } from "@/lib/campaigns/plan";
+import {
+  approvableContent,
+  campaignContentHash,
+  campaignGate,
+  volumeGate,
+  VOLUME_JUMP_FACTOR,
+} from "@/lib/campaigns/approval";
 import type {
   Campaign,
   CampaignEnrolment,
@@ -43,6 +50,10 @@ function campaign(overrides: Partial<Campaign> = {}): Campaign {
     active: true,
     reenrolAfterDays: null,
     authoredBy: "u-marshall",
+    approvedAt: null,
+    approvedBy: null,
+    approvedHash: null,
+    lastRunCount: null,
     steps: [step(1, 0), step(2, 3)],
     ...overrides,
   };
@@ -299,5 +310,142 @@ describe("idempotency", () => {
       enrolmentId: "enr-1",
       dealId: "r1",
     });
+  });
+});
+
+/* -------------------------------------------------------------------------
+   Bulk approval — the gate that keeps "nothing sends unreviewed" true
+   ------------------------------------------------------------------------- */
+
+describe("bulk approval gate", () => {
+  const bodies = new Map([
+    [1, "Hi Delia — how did we do? A quick Google review helps a lot."],
+    [2, "Hi Delia — one last nudge on that review if you have a minute."],
+  ]);
+  const unapproved = campaign({ approvalMode: "bulk" });
+  const content = approvableContent(unapproved, bodies);
+  const approvedHash = campaignContentHash(content);
+  const bulk = campaign({
+    approvalMode: "bulk",
+    approvedAt: new Date(2026, 6, 30),
+    approvedBy: "u-marshall",
+    approvedHash,
+  });
+
+  it("lets a per-message campaign through without any campaign approval", () => {
+    expect(campaignGate(campaign(), content)).toEqual({ allowed: true });
+  });
+
+  it("blocks a bulk campaign nobody has approved", () => {
+    const gate = campaignGate(unapproved, content);
+    expect(gate.allowed).toBe(false);
+    if (!gate.allowed) expect(gate.reason).toContain("has not been approved");
+  });
+
+  it("lets an approved bulk campaign send", () => {
+    expect(campaignGate(bulk, content)).toEqual({ allowed: true });
+  });
+
+  it("revokes approval when the copy is edited", () => {
+    const edited = approvableContent(
+      bulk,
+      new Map([[1, "Hi Delia — leave us five stars and we'll knock 10% off."], [2, bodies.get(2)!]]),
+    );
+    const gate = campaignGate(bulk, edited);
+    expect(gate.allowed).toBe(false);
+    if (!gate.allowed) expect(gate.reason).toContain("changed since it was approved");
+  });
+
+  it("revokes approval when the audience is widened", () => {
+    const wider = approvableContent(
+      { ...bulk, audience: { kind: "tagged", params: { tag: "DIRECT HOMEOWNER" } } },
+      bodies,
+    );
+    expect(campaignGate(bulk, wider).allowed).toBe(false);
+  });
+
+  it("revokes approval when a step's timing or channel changes", () => {
+    for (const steps of [
+      [step(1, 0), step(2, 30)],
+      [{ ...step(2, 3), channel: "EMAIL" }, step(1, 0)],
+    ]) {
+      const changed = approvableContent({ ...bulk, steps }, bodies);
+      expect(campaignGate(bulk, changed).allowed).toBe(false);
+    }
+  });
+
+  it("does not revoke over a rename — a label is not the substance", () => {
+    const renamed = approvableContent(
+      { ...bulk, name: "Review ask v2", description: "tidied up" },
+      bodies,
+    );
+    expect(campaignGate(bulk, renamed)).toEqual({ allowed: true });
+  });
+
+  it("hashes step order stably, so reordering the array is not an edit", () => {
+    const reversed = approvableContent({ ...bulk, steps: [step(2, 3), step(1, 0)] }, bodies);
+    expect(campaignContentHash(reversed)).toBe(approvedHash);
+  });
+
+  it("distinguishes never-approved from approved-then-changed", () => {
+    const never = campaignGate(unapproved, content);
+    const stale = campaignGate(bulk, approvableContent({ ...bulk, reenrolAfterDays: 90 }, bodies));
+    expect(never.allowed).toBe(false);
+    expect(stale.allowed).toBe(false);
+    if (!never.allowed && !stale.allowed) {
+      expect(never.reason).not.toBe(stale.reason);
+      expect(never.needsApproval).toBe(true);
+      expect(stale.needsApproval).toBe(true);
+    }
+  });
+});
+
+describe("volume guard", () => {
+  it("allows a first run, which the approval itself covered", () => {
+    expect(volumeGate({ recipientCount: 5000, lastRunCount: null })).toEqual({
+      allowed: true,
+    });
+  });
+
+  it("is invisible to ordinary growth", () => {
+    // A list growing a few percent a run never trips, however long it runs.
+    let last = 50;
+    for (let i = 0; i < 40; i++) {
+      const next = Math.ceil(last * 1.08);
+      expect(volumeGate({ recipientCount: next, lastRunCount: last }).allowed).toBe(true);
+      last = next;
+    }
+    expect(last).toBeGreaterThan(1000); // genuinely grew, never nagged
+  });
+
+  it("catches a step change on the first run after it happens", () => {
+    const gate = volumeGate({ recipientCount: 5000, lastRunCount: 50 });
+    expect(gate.allowed).toBe(false);
+    if (!gate.allowed) {
+      expect(gate.reason).toContain("5000");
+      expect(gate.reason).toContain("50");
+      // The campaign is still approved — only this run is held.
+      expect(gate.needsApproval).toBe(false);
+    }
+  });
+
+  it("stays quiet on the small daily runs post-job campaigns are made of", () => {
+    // 2 → 10 is a 5x jump and means nothing.
+    expect(volumeGate({ recipientCount: 10, lastRunCount: 2 }).allowed).toBe(true);
+  });
+
+  it("trips exactly at the factor, above the floor", () => {
+    const last = 30;
+    expect(
+      volumeGate({ recipientCount: last * VOLUME_JUMP_FACTOR, lastRunCount: last }).allowed,
+    ).toBe(true);
+    expect(
+      volumeGate({ recipientCount: last * VOLUME_JUMP_FACTOR + 1, lastRunCount: last })
+        .allowed,
+    ).toBe(false);
+  });
+
+  it("does not fire when a list shrinks", () => {
+    expect(volumeGate({ recipientCount: 40, lastRunCount: 5000 }).allowed).toBe(true);
   });
 });

@@ -121,7 +121,9 @@ export function toApproval(row: ApprovalRow): Approval {
   return {
     id: row.id,
     dealId: row.dealId,
-    triggerType: row.triggerType as TriggerType,
+    triggerType: (row.triggerType as TriggerType | null) ?? null,
+    campaignId: row.campaignId,
+    campaignStepId: row.campaignStepId,
     title: row.title,
     subtitle: row.subtitle,
     chip: row.chip,

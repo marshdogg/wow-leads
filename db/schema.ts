@@ -1,6 +1,8 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import {
   boolean,
+  check,
+  date,
   index,
   integer,
   jsonb,
@@ -323,6 +325,16 @@ export const jobs = pgTable(
   "jobs",
   {
     id: text("id").primaryKey(),
+    /**
+     * The Funnel's own id for this job, and the key the ingest endpoint
+     * conflicts on. Separate from `id` deliberately: our primary keys should
+     * not inherit an external system's format, and a retried webhook must
+     * update a row rather than produce a second one — a second row here is a
+     * second review request to the same customer.
+     *
+     * Null for anything not delivered by the Funnel.
+     */
+    wowOsJobId: text("wow_os_job_id"),
     accountId: text("account_id")
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
@@ -343,6 +355,7 @@ export const jobs = pgTable(
     index("jobs_account_idx").on(t.accountId),
     index("jobs_completed_idx").on(t.completedAt),
     index("jobs_deal_idx").on(t.dealId),
+    uniqueIndex("jobs_wow_os_idx").on(t.wowOsJobId),
   ],
 );
 
@@ -372,6 +385,28 @@ export const campaigns = pgTable("campaigns", {
   /** Null means once-only. */
   reenrolAfterDays: integer("reenrol_after_days"),
   authoredBy: text("authored_by").references(() => users.id),
+
+  /**
+   * Bulk approval, which approves a campaign *version* rather than a run.
+   *
+   * `approvedHash` covers the audience rule, the steps and the resolved copy.
+   * Editing any of them clears all three columns, so the campaign stops
+   * sending until somebody approves again — without that, "approve once" is a
+   * hole an edit passes through afterwards. Revocation happens in
+   * `saveCampaign`, not in the caller, because a gate a caller can forget is
+   * not a gate. See DECISIONS.md.
+   */
+  /**
+   * Recipients on the last run, for the volume guard. A campaign approved
+   * when a tag matched 50 accounts should not silently send to 5,000 — the
+   * guard compares against this and re-asks. Null until a first run.
+   */
+  lastRunCount: integer("last_run_count"),
+
+  approvedAt: timestamp("approved_at", { withTimezone: true }),
+  approvedBy: text("approved_by").references(() => users.id),
+  approvedHash: text("approved_hash"),
+
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -429,6 +464,37 @@ export const campaignEnrolments = pgTable(
     index("campaign_enrolments_campaign_idx").on(t.campaignId),
     index("campaign_enrolments_deal_idx").on(t.dealId),
     index("campaign_enrolments_state_idx").on(t.state),
+    // Re-enrolment reuses the row rather than adding one, so `enrolledAt` is
+    // always the most recent entry and the re-enrolment guard reads it
+    // directly.
+    uniqueIndex("campaign_enrolments_once_idx").on(t.campaignId, t.dealId),
+  ],
+);
+
+/**
+ * What has already gone out, and the only thing that makes a run replayable.
+ *
+ * `enrolments.current_step` cannot express "already done today" — two runs on
+ * the same morning would both see step 2 pending and both send it. The unique
+ * constraint is the guarantee; the date is what a human reads when asking why
+ * somebody got two texts.
+ */
+export const campaignSends = pgTable(
+  "campaign_sends",
+  {
+    id: text("id").primaryKey(),
+    enrolmentId: text("enrolment_id")
+      .notNull()
+      .references(() => campaignEnrolments.id, { onDelete: "cascade" }),
+    stepNumber: integer("step_number").notNull(),
+    sentOn: date("sent_on").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("campaign_sends_date_idx").on(t.sentOn),
+    uniqueIndex("campaign_sends_once_idx").on(t.enrolmentId, t.stepNumber),
   ],
 );
 
@@ -579,8 +645,24 @@ export const approvals = pgTable(
     dealId: text("deal_id")
       .notNull()
       .references(() => deals.id, { onDelete: "cascade" }),
-    /** eleven_month | seasonal | revival | sequence */
-    triggerType: text("trigger_type").notNull(),
+    /**
+     * eleven_month | seasonal | revival | sequence | …
+     *
+     * Nullable because a campaign send is also a message awaiting review, and
+     * it was not produced by a trigger. Writing a plausible-looking trigger
+     * type to satisfy a constraint would put a false claim on the approvals
+     * card and in the audit trail — the row would say a trigger fired when
+     * none did. The check constraint below requires exactly one source.
+     */
+    triggerType: text("trigger_type"),
+    /** Set instead of `triggerType` when this is a campaign step awaiting review. */
+    campaignId: text("campaign_id").references((): AnyPgColumn => campaigns.id, {
+      onDelete: "cascade",
+    }),
+    campaignStepId: text("campaign_step_id").references(
+      (): AnyPgColumn => campaignSteps.id,
+      { onDelete: "cascade" },
+    ),
     title: text("title").notNull(),
     subtitle: text("subtitle").notNull().default(""),
     /** "TRIGGER FIRED TODAY" | "SEQUENCE STEP" */
@@ -604,6 +686,19 @@ export const approvals = pgTable(
   (t) => [
     index("approvals_deal_idx").on(t.dealId),
     index("approvals_status_idx").on(t.status),
+    index("approvals_campaign_idx").on(t.campaignId),
+    /*
+     * Exactly one source. Same shape as the actor pair `appendAudit`
+     * enforces, but in the database rather than in a function, because this
+     * one guards what the Approvals queue *means*: every row is a message
+     * somebody is waiting to review, and it came from either a trigger or a
+     * campaign step. `deal_id` stays NOT NULL — a campaign send is still to
+     * somebody.
+     */
+    check(
+      "approvals_one_source_chk",
+      sql`(trigger_type is not null) <> (campaign_id is not null)`,
+    ),
   ],
 );
 

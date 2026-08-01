@@ -1,4 +1,4 @@
-import type { PipelineCategory, PipelineId, StageId } from "@/lib/types";
+import type { PipelineCategory, PipelineId } from "@/lib/types";
 
 /**
  * Campaigns — user-created outreach programmes that are *not* pipelines.
@@ -44,9 +44,15 @@ export interface AudienceParams {
   months?: number;
   /** `tagged` — the account tag, e.g. "DIRECT HOMEOWNER". */
   tag?: string;
-  /** `pipeline_stage` */
-  pipelineId?: PipelineId;
-  stageId?: StageId;
+  /**
+   * `pipeline_stage`. Open strings rather than the seeded unions: categories
+   * are already user-creatable and pipelines are rows, so an audience must be
+   * able to name one that didn't exist at compile time. Validated against the
+   * database at the boundary, which also catches a stage deleted after the
+   * campaign was written — something a literal union cannot do.
+   */
+  pipelineId?: string;
+  stageId?: string;
 }
 
 export interface Audience {
@@ -107,6 +113,22 @@ export interface Campaign {
   /** Stops someone receiving the same campaign twice within the window. */
   reenrolAfterDays: number | null;
   authoredBy: string | null;
+  /** Recipients on the last run. Null until it has run. Feeds the volume guard. */
+  lastRunCount: number | null;
+
+  /**
+   * Bulk approval of a campaign *version*.
+   *
+   * `approvedHash` covers the audience rule, the steps and the resolved copy,
+   * so editing any of them clears all three and the campaign stops sending
+   * until somebody approves again. Revocation happens in `saveCampaign` —
+   * a gate a caller can forget to close is not a gate. Always null on a
+   * per-message campaign, which approves nothing in advance.
+   */
+  approvedAt: Date | null;
+  approvedBy: string | null;
+  approvedHash: string | null;
+
   steps: CampaignStep[];
 }
 

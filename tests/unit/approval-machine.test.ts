@@ -228,6 +228,8 @@ describe("next action", () => {
       reasons: [],
       footnote: "",
       status: "drafted",
+      campaignId: null,
+      campaignStepId: null,
       createdAt: now,
     };
   }

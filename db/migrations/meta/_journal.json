@@ -50,6 +50,20 @@
       "when": 1785610264629,
       "tag": "0006_living_zeigeist",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1785610602388,
+      "tag": "0007_hot_texas_twister",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1785611202892,
+      "tag": "0008_opposite_jasper_sitwell",
+      "breakpoints": true
     }
   ]
 }

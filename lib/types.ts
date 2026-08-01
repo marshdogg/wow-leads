@@ -348,7 +348,14 @@ export type ApprovalStatus =
 export interface Approval {
   id: string;
   dealId: string;
-  triggerType: TriggerType;
+  /**
+   * Null when this is a campaign step rather than a trigger draft. Exactly one
+   * of `triggerType` and `campaignId` is set — a queue row is a message
+   * somebody is waiting to review, and it came from one source or the other.
+   */
+  triggerType: TriggerType | null;
+  campaignId: string | null;
+  campaignStepId: string | null;
   title: string;
   subtitle: string;
   /** "TRIGGER FIRED TODAY" | "SEQUENCE STEP" */

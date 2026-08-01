@@ -86,6 +86,17 @@ Two shapes were rejected on the way here:
 
 Per-message remains the default. A franchise opts into bulk deliberately.
 
+**Bulk requires every step to pin a template.** These two defaults were set
+separately and contradict each other: a campaign step leaves `templateId` null
+so its copy follows the Templates screen, and bulk approval hashes the resolved
+copy of each step. A step with no pinned template has no copy to hash — hashing
+the empty string would tick the approval box over nothing, a hole in exactly
+the guarantee bulk is trading against. Bulk approval means a human approved
+*this copy* going to *this rule*; unpinned copy is not specific, so there is
+nothing to have approved. Refused in the editor, in the approve action, and in
+the runner. Null remains the right default for per-message campaigns, where
+every send is reviewed individually.
+
 **Known limit:** the hash covers the audience *rule*, not the audience *size*.
 A campaign approved when a tag matched 50 accounts keeps its approval when the
 same tag later matches 5,000, because nothing about the campaign changed. The
