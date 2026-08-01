@@ -139,7 +139,12 @@ export async function saveTemplate(
     subject: input.subject ?? null,
     body: input.body,
     active: input.active ?? true,
-    allowAiAdaptation: input.allowAiAdaptation ?? false,
+    // Only defaulted for a *new* template. On an update an omitted field must
+    // preserve what is stored — see the `set` clause below. Coercing to false
+    // here would silently disarm a franchise's opt-in every time anyone saved
+    // an unrelated wording change from a screen that doesn't expose it.
+    allowAiAdaptation:
+      input.allowAiAdaptation ?? existing?.allowAiAdaptation ?? false,
     isDefault: false,
     authoredBy: input.actorUserId,
     updatedAt: now,
@@ -160,7 +165,10 @@ export async function saveTemplate(
         subject: values.subject,
         body: values.body,
         active: values.active,
-        allowAiAdaptation: values.allowAiAdaptation,
+        // Absent means "leave it alone", not "turn it off".
+        ...(input.allowAiAdaptation === undefined
+          ? {}
+          : { allowAiAdaptation: input.allowAiAdaptation }),
         authoredBy: values.authoredBy,
         updatedAt: now,
       },

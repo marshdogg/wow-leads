@@ -8,7 +8,6 @@
  */
 
 import {
-  TEMPLATE_VARIABLES,
   factsSatisfy,
   renderTemplate,
   tokensIn,
@@ -221,21 +220,21 @@ export function eligibilityExplanation(
   if (result.unknown.length) {
     return `Fix the unrecognised ${result.unknown.length === 1 ? "variable" : "variables"} before this can be previewed.`;
   }
-  // The registry's `source` strings are whole sentences, sometimes two ("The
-  // completed job on the account. Absent for a lead with no job."), so they
-  // stand on their own rather than being spliced into the middle of one.
-  const tokens = result.missing.map((t) => `{{${t}}}`).join(" and ");
-  const sources = result.missing
-    .map((t) => TEMPLATE_VARIABLES.find((v) => v.token === t)?.source)
-    .filter((s): s is string => Boolean(s))
-    .join(" ");
-
+  // Deliberately does *not* quote each variable's `source`. Those sentences
+  // were written to sit beside one variable at a time in the palette; three of
+  // them concatenated read as a wall and bury the only line that explains what
+  // is happening. Name the tokens here, let the palette describe them.
   return (
-    `This template won't be used for ${recordName}: the record has no value for ${tokens}. ` +
-    `${sources} ` +
-    `That is the rule working — rather than send a sentence with a hole in it, ` +
-    `the agent falls through to a less specific template.`
+    `${recordName} has no value for ${list(result.missing.map((t) => `{{${t}}}`))}. ` +
+    `Rather than send a sentence with a hole in it, the agent falls through to ` +
+    `a simpler template.`
   );
+}
+
+/** "a", "a and b", "a, b and c". */
+function list(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
 /* -------------------------------------------------------------------------

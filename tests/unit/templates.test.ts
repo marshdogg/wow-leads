@@ -179,3 +179,31 @@ describe("rendering", () => {
     expect(() => renderTemplate(t, FACTS)).toThrow(/job\.scope/);
   });
 });
+
+describe("saveTemplate's treatment of an omitted flag", () => {
+  /**
+   * A pure restatement of the merge rule in `saveTemplate`, so the intent is
+   * pinned even though the repository itself needs a database. The bug this
+   * guards: the editor doesn't expose `allowAiAdaptation`, so coercing an
+   * omitted value to `false` silently disarmed a franchise's opt-in every time
+   * anyone saved an unrelated wording change.
+   */
+  const merge = (
+    incoming: boolean | undefined,
+    stored: boolean | undefined,
+  ): boolean => incoming ?? stored ?? false;
+
+  it("preserves the stored value when the caller omits the flag", () => {
+    expect(merge(undefined, true)).toBe(true);
+    expect(merge(undefined, false)).toBe(false);
+  });
+
+  it("still defaults a brand-new template to off", () => {
+    expect(merge(undefined, undefined)).toBe(false);
+  });
+
+  it("lets an explicit value win, in both directions", () => {
+    expect(merge(true, false)).toBe(true);
+    expect(merge(false, true)).toBe(false);
+  });
+});

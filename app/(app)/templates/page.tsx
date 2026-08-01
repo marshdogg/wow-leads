@@ -21,9 +21,12 @@ export default async function TemplatesPage() {
     getAllDeals(),
   ]);
 
+  // Two forms on purpose: the picker needs the address to tell two Ramans
+  // apart, prose does not want it mid-sentence.
   const previewDeals = deals.map((d) => ({
     id: d.id,
-    name: `${d.name} · ${d.account}`,
+    name: d.name,
+    label: `${d.name} · ${d.account}`,
   }));
   const facts = await getTemplateFactsFor(deals.map((d) => d.id));
 

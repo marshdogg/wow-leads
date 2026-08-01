@@ -112,7 +112,8 @@ export async function saveTemplateAction(
     stageId: parsed.data.stageId ?? null,
     track: parsed.data.track ?? null,
     active: parsed.data.active ?? true,
-    allowAiAdaptation: parsed.data.allowAiAdaptation ?? false,
+    // Undefined, not false: the repository preserves the stored value.
+    allowAiAdaptation: parsed.data.allowAiAdaptation,
     isDefault: false,
     authoredBy: null,
     updatedAt: new Date(),

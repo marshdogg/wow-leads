@@ -12,7 +12,10 @@ import { optionStyle, selectStyle } from "./Field";
 
 export interface PreviewDeal {
   id: string;
+  /** Just the person or project — used in prose. */
   name: string;
+  /** Name plus address, to disambiguate in the picker. */
+  label: string;
 }
 
 /**
@@ -81,7 +84,7 @@ export function TemplatePreview({
         >
           {deals.map((d) => (
             <option key={d.id} value={d.id} style={optionStyle}>
-              {d.name}
+              {d.label}
             </option>
           ))}
         </select>

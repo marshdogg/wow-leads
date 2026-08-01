@@ -12,7 +12,10 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   timeout: 90_000,
-  expect: { timeout: 15_000 },
+  // Observed Neon latency on this project swings from ~17s for the whole
+  // suite to several minutes for the same run. The assertions are right; the
+  // database is sometimes slow. A 15s budget turned that into false failures.
+  expect: { timeout: 30_000 },
   reporter: [["list"]],
   use: {
     baseURL,

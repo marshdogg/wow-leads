@@ -112,7 +112,7 @@ describe("eligibilityExplanation", () => {
     ).toBeNull();
   });
 
-  it("names the record, the token, and why the token is absent", () => {
+  it("names the record and the tokens it cannot fill", () => {
     const draft = { ...base, body: "About {{job.scope}}." };
     const msg = eligibilityExplanation(
       previewTemplate(draft, noJob),
@@ -120,14 +120,35 @@ describe("eligibilityExplanation", () => {
     );
     expect(msg).toContain("Adaeze Nwosu");
     expect(msg).toContain("{{job.scope}}");
-    // Reuses the registry's own wording rather than inventing an explanation.
-    expect(msg).toMatch(/absent for a lead with no job/i);
+  });
+
+  it("does not repeat the palette's description of each variable", () => {
+    // Those sentences are written to sit beside one variable at a time. Three
+    // of them strung together read as a wall and bury the explanation.
+    const draft = {
+      ...base,
+      body: "About {{job.scope}} we did {{job.completedMonth}}.",
+    };
+    const msg = eligibilityExplanation(previewTemplate(draft, noJob), "Adaeze");
+    expect(msg).not.toMatch(/absent for a lead with no job/i);
+    expect(msg).not.toMatch(/completion date of the last job/i);
+  });
+
+  it("reads as a list when several tokens are missing", () => {
+    const draft = {
+      ...base,
+      body: "{{job.scope}} {{job.completedMonth}} {{job.address}}",
+    };
+    const msg = eligibilityExplanation(previewTemplate(draft, noJob), "Adaeze");
+    expect(msg).toContain(
+      "{{job.scope}}, {{job.completedMonth}} and {{job.address}}",
+    );
   });
 
   it("frames it as the rule working, not as an error", () => {
     const draft = { ...base, body: "About {{job.scope}}." };
     const msg = eligibilityExplanation(previewTemplate(draft, noJob), "Adaeze");
-    expect(msg).toMatch(/falls through to a less specific template/);
+    expect(msg).toMatch(/falls through to a simpler template/);
     expect(msg).not.toMatch(/error|invalid|failed/i);
   });
 
