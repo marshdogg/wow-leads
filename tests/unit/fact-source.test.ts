@@ -190,6 +190,22 @@ describe("job facts come from `jobs`, not from touchpoints", () => {
     expect(facts?.scope.areas).toEqual([]);
   });
 
+  it("gives a booked-but-never-completed deal no job facts at all", () => {
+    // The shape that becomes normal: `bookDeal` writes a JOB touchpoint on
+    // every booking, so a deal booked without a prior completion carries one
+    // and has no `jobs` row. Nothing here should read the touchpoint and
+    // conclude a job finished — and nothing should require a row to exist,
+    // either. The absence has to degrade, not throw and not guess.
+    const ctx = context({
+      jobsByAccount: new Map(),
+      touchpointsByDeal: new Map([["r1", [ESTIMATE_BOOKING]]]),
+    });
+    // No job row, and no COMPLETED metric to fall through to.
+    const deal = dealRow({ metrics: [], stale: "booked today" });
+    expect(elevenMonthFacts(ctx, deal)).toBeNull();
+    expect(neighbourCampaignFacts(ctx, deal)).toEqual([]);
+  });
+
   it("will not claim a finished job to the neighbours without a job row", () => {
     // A JOB touchpoint saying "completed" is not evidence. "We just finished
     // the exterior next door" goes to real houses on a real street, so the

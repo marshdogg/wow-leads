@@ -97,12 +97,35 @@ nothing to have approved. Refused in the editor, in the approve action, and in
 the runner. Null remains the right default for per-message campaigns, where
 every send is reviewed individually.
 
-**Known limit:** the hash covers the audience *rule*, not the audience *size*.
-A campaign approved when a tag matched 50 accounts keeps its approval when the
-same tag later matches 5,000, because nothing about the campaign changed. The
-policy was approved; the volume was not. A guardrail that re-asks when a run
-greatly exceeds the size at approval time would close it, at the cost of
-nagging a legitimately growing list.
+**The hash covers the audience rule, not the audience size** — a campaign
+approved when a tag matched 50 accounts would keep its approval at 5,000,
+because nothing about the campaign changed. The policy was approved; the volume
+was not. That gap is closed by `volumeGate` in `lib/campaigns/approval.ts`
+(`VOLUME_JUMP_FACTOR = 4`, `VOLUME_FLOOR = 25`), which pauses a run and asks.
+
+It compares against **the previous run, not the audience size at approval** —
+the opposite of what this paragraph originally proposed, and the change is
+worth recording. Measuring from approval time punishes growth: a franchise
+adding a hundred customers a month trips any fixed multiple eventually, every
+year, and a guard that cries wolf on ordinary success gets turned off, which is
+worse than not having one. Consecutive runs make gradual growth invisible while
+a bulk import or a mistyped audience appears as a step change on the first run
+after it happens. Simulated: forty runs at 8% compounding growth, 50 → 1000+,
+never trips; a single 50 → 5000 jump trips immediately. A tripped run pauses
+and asks without revoking the approval — the run is the surprising thing, not
+the policy.
+
+**A second bypass, found while wiring the pinning rule and worse than it.** The
+approval gate only ran when a plan contained an `advance` action. But a first
+step with `delayDays: 0` sends on the day someone enrols, so an `enrol` is a
+send too — and on a post-job review campaign, where everyone is on step one the
+day they qualify, it is the *only* kind of send that ever happens. A bulk
+review campaign would have sent step one to everybody with the gate never
+consulted: the exact campaign bulk mode was designed for, entirely ungated. The
+volume guard shared the blind spot from the same line. Both now count advances
+plus immediate enrolments, and the gate lives inside `campaignGate` rather than
+beside it — three callers share it, and a gate each caller has to remember to
+invoke is one somebody eventually doesn't.
 
 ## Other decisions worth knowing
 

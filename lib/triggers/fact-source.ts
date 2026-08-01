@@ -321,9 +321,19 @@ export function scopeAreas(ctx: FactContext, deal: DealRow): string[] {
 }
 
 /**
- * The most recent completed job. `jobs` is the only source — an account with
- * no row there has no job facts, and the copy is built to say less rather than
- * to guess from a touchpoint body.
+ * The most recent completed job. `jobs` is the only source.
+ *
+ * **Returning `undefined` is the normal case, not the broken one.** A JOB
+ * touchpoint does not imply a `jobs` row and never did: `bookDeal` writes one
+ * on every booking, so any deal booked without a prior completion has a JOB
+ * touchpoint and no row — which is most deals, going forward.
+ *
+ * So do not add a fallback here to "cover" those deals. What keeps them
+ * correct is that every caller degrades: `elevenMonthFacts` falls through to
+ * the COMPLETED metric and then to nothing, `neighbourCampaignFacts` returns
+ * no candidates at all, and `scopeFacts` drops to the account's tag. A deal
+ * with no completed job has no job facts, and the copy is built to say less
+ * rather than to guess from a touchpoint body.
  */
 function latestJob(ctx: FactContext, deal: DealRow): JobRow | undefined {
   const rows = deal.accountId ? (ctx.jobsByAccount.get(deal.accountId) ?? []) : [];
