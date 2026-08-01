@@ -44,8 +44,15 @@ import type {
   MessageTemplate,
   TemplateChannel,
   TemplateFacts,
+  TemplateQuery,
 } from "@/lib/templates/types";
-import type { PipelineId, StageId, TrackId, TriggerType } from "@/lib/types";
+import type {
+  ContactChannel,
+  PipelineId,
+  StageId,
+  TrackId,
+  TriggerType,
+} from "@/lib/types";
 
 type TemplateRow = typeof templates.$inferSelect;
 
@@ -73,7 +80,11 @@ export async function getTemplates(): Promise<MessageTemplate[]> {
   const rows = await db
     .select()
     .from(templates)
-    .orderBy(asc(templates.isDefault), desc(templates.updatedAt), asc(templates.id));
+    .orderBy(
+      asc(templates.isDefault),
+      desc(templates.updatedAt),
+      asc(templates.id),
+    );
   return rows.map(toTemplate);
 }
 
@@ -291,10 +302,19 @@ export async function duplicateTemplate(
  * `lib/triggers/dates.ts` rather than re-deriving, so a rendered template says
  * the same thing the drafter would.
  */
-export async function getTemplateFactsFor(
+export interface TemplatePreviewContext {
+  facts: TemplateFacts;
+  /**
+   * Everything a `TemplateQuery` needs except `triggerType`, which is not a
+   * property of a record at all — it comes from the template being edited.
+   */
+  query: Omit<TemplateQuery, "triggerType">;
+}
+
+export async function getTemplatePreviewContextFor(
   dealIds: string[],
   now = new Date(),
-): Promise<Record<string, TemplateFacts>> {
+): Promise<Record<string, TemplatePreviewContext>> {
   if (!dealIds.length) return {};
 
   const dealRows = await db
@@ -304,7 +324,9 @@ export async function getTemplateFactsFor(
   if (!dealRows.length) return {};
 
   const accountIds = dealRows.map((d) => d.accountId).filter(isPresent);
-  const sourceJobIds = dealRows.map((d) => d.sourcedFromDealId).filter(isPresent);
+  const sourceJobIds = dealRows
+    .map((d) => d.sourcedFromDealId)
+    .filter(isPresent);
   const promoIds = dealRows.map((d) => d.promoId).filter(isPresent);
   const allDealIds = dealRows.map((d) => d.id);
 
@@ -319,7 +341,10 @@ export async function getTemplateFactsFor(
     referenceRows,
   ] = await Promise.all([
     accountIds.length
-      ? db.select().from(contacts).where(inArray(contacts.accountId, accountIds))
+      ? db
+          .select()
+          .from(contacts)
+          .where(inArray(contacts.accountId, accountIds))
       : [],
     accountIds.length
       ? db.select().from(accounts).where(inArray(accounts.id, accountIds))
@@ -349,7 +374,11 @@ export async function getTemplateFactsFor(
     // A reference we can name in a cold intro: an active commercial account
     // that is not the prospect's own. Named from a row, never invented.
     db
-      .select({ name: deals.name, account: deals.accountLine, tags: deals.tags })
+      .select({
+        name: deals.name,
+        account: deals.accountLine,
+        tags: deals.tags,
+      })
       .from(deals)
       .where(eq(deals.pipelineId, "comm"))
       .orderBy(asc(deals.id)),
@@ -366,15 +395,16 @@ export async function getTemplateFactsFor(
   );
 
   const sender = getCurrentUser();
-  const out: Record<string, TemplateFacts> = {};
+  const out: Record<string, TemplatePreviewContext> = {};
 
   for (const deal of dealRows) {
     const own = touchByDeal.get(deal.id) ?? [];
     // A neighbour lead's job is the one it was sourced from; everyone else's
     // is their own.
     const jobDealId = deal.sourcedFromDealId ?? deal.id;
-    const jobTouchpoints =
-      deal.sourcedFromDealId ? (jobTouchByDeal.get(jobDealId) ?? []) : own;
+    const jobTouchpoints = deal.sourcedFromDealId
+      ? (jobTouchByDeal.get(jobDealId) ?? [])
+      : own;
     const job = jobTouchpoints.find(
       (t) => t.channel === "JOB" && isCompletionRecord(t),
     );
@@ -395,7 +425,8 @@ export async function getTemplateFactsFor(
     const promo = deal.promoId ? promoById.get(deal.promoId) : null;
     const promoSend = own.find((t) => /offer sent|promo/i.test(t.body));
     const loss = own.find((t) => /\blost\b/i.test(t.body));
-    const lost = Boolean(loss) || presentMetric(deal.metrics, "LOST FOR") !== null;
+    const lost =
+      Boolean(loss) || presentMetric(deal.metrics, "LOST FOR") !== null;
     const canvass = canvassByDeal.get(deal.id);
     const proximity = canvass ? proximityFrom(canvass.notes) : null;
     const reference = referenceRows.find(
@@ -404,56 +435,107 @@ export async function getTemplateFactsFor(
     const enquired = metric(deal.metrics, "ENQUIRED");
     const enquiredAt = parseMonthYear(enquired);
 
+    const contactsHere = byAccount.get(deal.accountId ?? "") ?? [];
+
     out[deal.id] = {
-      "contact.firstName": firstName(primary?.name),
-      "sender.firstName": firstName(sender.name),
-      "sender.company": COMPANY,
+      query: {
+        pipelineId: deal.pipelineId as PipelineId,
+        stageId: deal.stageId as StageId,
+        track: (deal.track as TrackId | null) ?? null,
+        // The contact's own preference, not the deal's. Where nobody is on
+        // file — a canvassed address, say — this is EMAIL as a *default*, not
+        // as a fact about anyone. See the note in the report.
+        channel: preferredChannel(primary, contactsHere),
+      },
+      facts: {
+        "contact.firstName": firstName(primary?.name),
+        "sender.firstName": firstName(sender.name),
+        "sender.company": COMPANY,
 
-      "job.scope": workType ? `the ${workType} work` : null,
-      "job.workType": workType,
-      "job.completedMonth": job ? completionPhrase(job.occurredAt, now) : null,
-      "job.areas": areas.length ? joinList(areas) : null,
-      "job.address": sourceJob?.accountLine ?? (job ? deal.accountLine : null),
-
-      "promo.discount": promo?.discount ?? null,
-      "promo.label": promo?.label ?? null,
-      "promo.expires": promo?.windowEnd ? monthDay(promo.windowEnd) : null,
-      "promo.sentWhen": promoSend
-        ? recentSendPhrase(promoSend.occurredAt, now)
-        : null,
-      "promo.slot": weekdayName(nextWeekdaySlot(now)),
-
-      // Only when something was actually lost. Deriving a scope from the tag
-      // would let "we quoted your {{loss.scope}}" go to someone we never
-      // quoted.
-      "loss.value": lost ? presentMetric(deal.metrics, "ORIGINAL") : null,
-      "loss.month": loss ? monthName(loss.occurredAt) : null,
-      "loss.scope": lost ? `${tagWorkType(deal.tags) ?? "painting"} repaint` : null,
-      season: seasonName(now),
-
-      // Biz Dev only: the card's name is the person, the account is the firm.
-      "prospect.firstName":
-        deal.pipelineId === "bizdev" ? firstName(deal.name) : null,
-      "prospect.company":
-        deal.pipelineId === "bizdev" ? shortAccountName(deal.accountLine) : null,
-      "reference.proof":
-        deal.pipelineId === "bizdev" && reference?.account
-          ? `${reference.account} sites`
+        "job.scope": workType ? `the ${workType} work` : null,
+        "job.workType": workType,
+        "job.completedMonth": job
+          ? completionPhrase(job.occurredAt, now)
           : null,
+        "job.areas": areas.length ? joinList(areas) : null,
+        "job.address":
+          sourceJob?.accountLine ?? (job ? deal.accountLine : null),
 
-      "neighbour.proximity": proximity ? proximityClause(proximity) : null,
-      // No stored crew-departure date, so this stays null and the "crew still
-      // on site" template is simply never chosen. Guessing a date would put a
-      // false promise on a stranger's doorstep.
-      "crew.until": crewUntil(accountById.get(deal.accountId ?? "")),
+        "promo.discount": promo?.discount ?? null,
+        "promo.label": promo?.label ?? null,
+        "promo.expires": promo?.windowEnd ? monthDay(promo.windowEnd) : null,
+        "promo.sentWhen": promoSend
+          ? recentSendPhrase(promoSend.occurredAt, now)
+          : null,
+        "promo.slot": weekdayName(nextWeekdaySlot(now)),
 
-      "enquiry.subject": tagWorkType(deal.tags),
-      "enquiry.month": enquiredAt ? enquiryWhen(enquiredAt, now) : null,
-      "enquiry.channel": enquiryChannel(deal.source, enquired),
+        // Only when something was actually lost. Deriving a scope from the tag
+        // would let "we quoted your {{loss.scope}}" go to someone we never
+        // quoted.
+        "loss.value": lost ? presentMetric(deal.metrics, "ORIGINAL") : null,
+        "loss.month": loss ? monthName(loss.occurredAt) : null,
+        "loss.scope": lost
+          ? `${tagWorkType(deal.tags) ?? "painting"} repaint`
+          : null,
+        season: seasonName(now),
+
+        // Biz Dev only: the card's name is the person, the account is the firm.
+        "prospect.firstName":
+          deal.pipelineId === "bizdev" ? firstName(deal.name) : null,
+        "prospect.company":
+          deal.pipelineId === "bizdev"
+            ? shortAccountName(deal.accountLine)
+            : null,
+        "reference.proof":
+          deal.pipelineId === "bizdev" && reference?.account
+            ? `${reference.account} sites`
+            : null,
+
+        "neighbour.proximity": proximity ? proximityClause(proximity) : null,
+        // No stored crew-departure date, so this stays null and the "crew still
+        // on site" template is simply never chosen. Guessing a date would put a
+        // false promise on a stranger's doorstep.
+        "crew.until": crewUntil(accountById.get(deal.accountId ?? "")),
+
+        "enquiry.subject": tagWorkType(deal.tags),
+        "enquiry.month": enquiredAt ? enquiryWhen(enquiredAt, now) : null,
+        "enquiry.channel": enquiryChannel(deal.source, enquired),
+      },
     };
   }
 
   return out;
+}
+
+/** Just the facts — what the drafter needs, without the preview's query. */
+export async function getTemplateFactsFor(
+  dealIds: string[],
+  now = new Date(),
+): Promise<Record<string, TemplateFacts>> {
+  const context = await getTemplatePreviewContextFor(dealIds, now);
+  return Object.fromEntries(
+    Object.entries(context).map(([id, c]) => [id, c.facts]),
+  );
+}
+
+const CONTACT_CHANNELS: ContactChannel[] = ["SMS", "EMAIL", "PHONE"];
+
+function isContactChannel(value: string): value is ContactChannel {
+  return (CONTACT_CHANNELS as string[]).includes(value);
+}
+
+/**
+ * The channel this person prefers. Primary contact first, then anyone else on
+ * the account, then EMAIL — which is a default rather than a preference, and
+ * the only honest option when the type admits no "unknown".
+ */
+function preferredChannel(
+  primary: { prefers: string } | undefined,
+  all: { prefers: string }[],
+): ContactChannel {
+  const candidate =
+    primary?.prefers ?? all.find((c) => isContactChannel(c.prefers))?.prefers;
+  return candidate && isContactChannel(candidate) ? candidate : "EMAIL";
 }
 
 const COMPANY = "WOW 1 DAY PAINTING";
@@ -512,7 +594,8 @@ function crewUntil(
 
 /** "back in June last year" — never a date the record did not capture. */
 function enquiryWhen(enquiredAt: Date, now: Date): string {
-  const suffix = enquiredAt.getFullYear() < now.getFullYear() ? " last year" : "";
+  const suffix =
+    enquiredAt.getFullYear() < now.getFullYear() ? " last year" : "";
   return `back in ${monthName(enquiredAt)}${suffix}`;
 }
 
@@ -531,7 +614,10 @@ const ENQUIRY_CHANNELS: Record<string, string> = {
   "Trade Show": "the trade show",
 };
 
-function enquiryChannel(source: string, enquired: string | null): string | null {
+function enquiryChannel(
+  source: string,
+  enquired: string | null,
+): string | null {
   if (enquired && /show|expo|fair/i.test(enquired)) {
     return `the ${enquired.toLowerCase()}`;
   }
