@@ -63,9 +63,9 @@ export function LeadCard({
 
   return (
     <div
-      data-testid="lead-card"
+      data-testid={`lead-card-${deal.id}`}
       data-deal-id={deal.id}
-      data-collapsed={collapsed || undefined}
+      data-collapsed={collapsed ? "true" : "false"}
       className="hover:!border-[#3d4a37]"
       onClick={collapsed ? () => router.push(recordHref) : undefined}
       style={{
@@ -295,7 +295,10 @@ export function LeadCard({
               <OwnerBadge owner={deal.owner} />
               <span style={{ fontSize: 12, color: "#98a298" }}>{v.ownerLine}</span>
             </div>
-            <span style={{ fontSize: 11, color: v.lastTouchColor }}>
+            <span
+              data-testid="stale"
+              style={{ fontSize: 11, color: v.lastTouchColor }}
+            >
               {v.lastTouch}
             </span>
           </div>
@@ -395,6 +398,7 @@ function NextActionBlock({
   if (state === "none") {
     return (
       <div
+        data-testid="next-action"
         style={{
           marginTop: 12,
           border: "1px dashed #3b423a",
@@ -430,8 +434,11 @@ function NextActionBlock({
   const overdue = state === "overdue";
   return (
     <div
+      data-testid="next-action"
       style={{
         marginTop: 12,
+        // Both the fill and the border live on this element — the e2e overdue
+        // test reads computed backgroundColor and borderColor off it.
         border: `1px solid ${overdue ? "#5c2620" : "#2f6b1f"}`,
         background: overdue ? "#1e100e" : "#0f1a0b",
         borderRadius: 9,

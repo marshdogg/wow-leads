@@ -91,7 +91,10 @@ export function ListTable({
                 key={h.id}
                 type="button"
                 onClick={() => onSort(nextSort(sort, h.id))}
-                data-testid={`sort-${h.id}`}
+                data-testid={`list-head-${h.id}`}
+                data-sort={
+                  active ? (sort.dir > 0 ? "asc" : "desc") : "none"
+                }
                 aria-label={`Sort by ${h.label.toLowerCase()}`}
                 className="hover:!text-[#c6cdc6]"
                 style={{
@@ -128,6 +131,7 @@ export function ListTable({
         ))}
 
         <div
+          data-testid="list-footer"
           style={{
             display: "flex",
             alignItems: "center",
@@ -167,7 +171,7 @@ function ListRow({
   return (
     <div
       role="row"
-      data-testid="list-row"
+      data-testid={`list-row-${deal.id}`}
       data-deal-id={deal.id}
       onClick={onOpen}
       className="hover:!bg-[#161a15]"
@@ -185,6 +189,7 @@ function ListRow({
       <div style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 10 }}>
         <span
           aria-hidden
+          data-testid="row-accent"
           style={{
             width: 3,
             height: 30,
@@ -214,7 +219,7 @@ function ListRow({
             >
               {deal.name}
             </Link>
-            {deal.aiPending && <AiDraftChip label="AI" />}
+            {deal.aiPending && <AiDraftChip compact />}
           </div>
           <div
             style={{
@@ -257,6 +262,7 @@ function ListRow({
         />
         <div style={{ minWidth: 0 }}>
           <div
+            data-testid="row-next"
             style={{
               fontSize: 13,
               color: !deal.next ? "#98a298" : overdue ? "#f0a294" : "#e2e7e2",
@@ -291,6 +297,7 @@ function ListRow({
       </div>
 
       <div
+        data-testid="row-stale"
         style={{
           fontFamily: "var(--font-mono)",
           fontSize: 12.5,

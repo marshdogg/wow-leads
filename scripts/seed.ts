@@ -9,7 +9,7 @@
  */
 
 import { config } from "dotenv";
-import { getTableColumns, inArray, sql, type SQL } from "drizzle-orm";
+import { getTableColumns, inArray, notInArray, sql, type SQL } from "drizzle-orm";
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
 import type { PgTable, PgUpdateSetSource } from "drizzle-orm/pg-core";
@@ -25,12 +25,19 @@ import {
 } from "@/lib/fixtures/deals";
 import { anchorDays, nextDueFrom } from "@/lib/fixtures/time";
 import { ESTIMATORS, PIPELINE_IDS, PIPES } from "@/lib/pipelines";
+import { CONTACT_CHANNELS, isContactChannel } from "@/lib/repositories/rules";
 
 config({ path: ".env.local" });
 
 const url = process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL;
 if (!url) throw new Error("DATABASE_URL is not set.");
 const db = drizzle(neon(url), { schema });
+
+/** The shared contact-channel set, as a SQL `in` list. */
+const contactChannelSql = sql`(${sql.join(
+  CONTACT_CHANNELS.map((c) => sql`${c}`),
+  sql`, `,
+)})`;
 
 const NOW = new Date();
 const MS_DAY = 86_400_000;
@@ -377,7 +384,11 @@ const promoRows = [
 
 const PROMO_BY_DEAL: Record<string, string> = { r5: "promo-spring15" };
 
-function dealRow(d: DealFixture, latestTouchAt: Date | null) {
+function dealRow(
+  d: DealFixture,
+  latestTouchAt: Date | null,
+  createdAt: Date,
+) {
   const isAgent = d.owner.agent;
   const inResult = d.pipe === "resi" && d.stage === "result";
   return {
@@ -418,7 +429,7 @@ function dealRow(d: DealFixture, latestTouchAt: Date | null) {
       ? (d.metrics?.find((m) => m.label === "RETRY")?.value ?? null)
       : null,
     promoId: PROMO_BY_DEAL[d.id] ?? null,
-    createdAt: NOW,
+    createdAt,
     updatedAt: NOW,
   };
 }
@@ -661,26 +672,36 @@ const touchpointRows: TouchpointRow[] = [
   ...eventTouchpoints,
 ];
 
-/**
- * A conversation, as opposed to a system event. TRIGGER, JOB and SOURCE rows
- * record something happening *to* the account, not someone talking to it, so
- * they never count as a touch — otherwise "Record created" would make a lead
- * nobody has ever phoned look freshly contacted.
- */
-const CONTACT_CHANNELS = new Set(["SMS", "EMAIL", "CALL", "VISIT", "NOTE"]);
-
 /** Most recent conversation per deal — the source of truth for lastTouchAt. */
 const latestTouchByDeal = new Map<string, Date>();
 for (const tp of touchpointRows) {
-  if (!CONTACT_CHANNELS.has(tp.channel)) continue;
+  if (!isContactChannel(tp.channel)) continue;
   const current = latestTouchByDeal.get(tp.dealId);
   if (!current || tp.occurredAt > current) {
     latestTouchByDeal.set(tp.dealId, tp.occurredAt);
   }
 }
 
+/**
+ * When the record was created — the date on its SOURCE row. A lead nobody has
+ * ever contacted is measured against this, so "identified a month ago, never
+ * called" reads as neglected while "added yesterday" reads as new.
+ */
+const createdAtByDeal = new Map<string, Date>();
+for (const tp of touchpointRows) {
+  if (tp.channel !== "SOURCE") continue;
+  const current = createdAtByDeal.get(tp.dealId);
+  if (!current || tp.occurredAt < current) {
+    createdAtByDeal.set(tp.dealId, tp.occurredAt);
+  }
+}
+
 const dealRows = DEAL_FIXTURES.map((d) =>
-  dealRow(d, latestTouchByDeal.get(d.id) ?? null),
+  dealRow(
+    d,
+    latestTouchByDeal.get(d.id) ?? null,
+    createdAtByDeal.get(d.id) ?? NOW,
+  ),
 );
 
 const approvalRows = APPROVAL_FIXTURES.map((a) => {
@@ -717,11 +738,46 @@ const auditRows = DEAL_FIXTURES.map((d) => ({
   createdAt: NOW,
 }));
 
+/** Every touchpoint id the seed has ever owned, current or retired. */
+const seedOwnedTouchpointIds = [
+  ...DEAL_FIXTURES.flatMap((d) => [1, 2, 3, 4, 5].map((n) => `tp-${d.id}-${n}`)),
+  ...eventTouchpoints.map((t) => t.id),
+];
+
+/** The ids a `--fresh` wipe must preserve: everything this run writes. */
+const allSeedTouchpointIds = [
+  ...new Set([...seedOwnedTouchpointIds, ...touchpointRows.map((t) => t.id)]),
+];
+
 /* -------------------------------------------------------------------------
    Run
    ------------------------------------------------------------------------- */
 
+/**
+ * Seeding converges: whatever testing did in between, `pnpm seed` restores the
+ * exact demo state. That means clearing touchpoints logged at runtime — quick
+ * logs, field notes, approved agent sends — because leaving them silently
+ * breaks the thing the demo is for. A rep exercising the quick-log row on
+ * Delia Marchetti leaves a human call dated today, which correctly suppresses
+ * her 11-month trigger and kills the signature flow; six voice-note saves
+ * leave her record showing seventeen entries instead of five.
+ *
+ * `pnpm seed --keep-activity` preserves them, for topping up a database you
+ * are actively working in rather than resetting one.
+ */
+const KEEP_ACTIVITY = process.argv.includes("--keep-activity");
+
 async function main() {
+  if (!KEEP_ACTIVITY) {
+    const wiped = await db
+      .delete(schema.touchpoints)
+      .where(notInArray(schema.touchpoints.id, allSeedTouchpointIds))
+      .returning({ id: schema.touchpoints.id });
+    if (wiped.length) {
+      console.log(`Cleared ${wiped.length} runtime touchpoint(s).`);
+    }
+  }
+
   await db
     .insert(schema.locations)
     .values(locationRows)
@@ -808,7 +864,7 @@ async function main() {
     .values(dealRows)
     .onConflictDoUpdate({
       target: schema.deals.id,
-      set: overwrite(schema.deals, ["id", "createdAt"]),
+      set: overwrite(schema.deals, ["id"]),
     });
 
   await db
@@ -824,14 +880,8 @@ async function main() {
   // previous seed survives and the record contradicts the card. Sweep the ids
   // the seed owns and no longer writes. Runtime touchpoints are `tp-<uuid>`
   // and never match, so nothing a rep or an agent logged is touched.
-  const seedOwnedIds = [
-    ...DEAL_FIXTURES.flatMap((d) =>
-      [1, 2, 3, 4, 5].map((n) => `tp-${d.id}-${n}`),
-    ),
-    ...eventTouchpoints.map((t) => t.id),
-  ];
   const liveIds = new Set(touchpointRows.map((t) => t.id));
-  const orphanIds = seedOwnedIds.filter((id) => !liveIds.has(id));
+  const orphanIds = seedOwnedTouchpointIds.filter((id) => !liveIds.has(id));
   if (orphanIds.length) {
     const removed = await db
       .delete(schema.touchpoints)
@@ -848,15 +898,16 @@ async function main() {
     .insert(schema.approvals)
     .values(approvalRows)
     .onConflictDoUpdate({
-      // Re-seeding must not un-decide an approval a human already handled.
+      // A re-seed restores the queue to three drafted approvals: the demo opens
+      // with the Approvals page populated, and an approve during testing must
+      // not leave it empty. `--keep-activity` preserves decisions instead.
       target: schema.approvals.id,
-      set: overwrite(schema.approvals, [
-        "id",
-        "status",
-        "decidedBy",
-        "decidedAt",
-        "createdAt",
-      ]),
+      set: overwrite(
+        schema.approvals,
+        KEEP_ACTIVITY
+          ? ["id", "status", "decidedBy", "decidedAt", "createdAt"]
+          : ["id", "createdAt"],
+      ),
     });
 
   await db
@@ -874,11 +925,12 @@ async function main() {
   // Manager dashboard would call a deal neglected whose timeline shows a
   // conversation today. The seeded rows already satisfy this; the statement
   // exists for everything logged on top of them.
-  const reconciled = await db.execute<{ id: string; days: number }>(sql`
+  const reconciled = KEEP_ACTIVITY
+    ? await db.execute<{ id: string; days: number }>(sql`
     with newest as (
       select deal_id, max(occurred_at) as at
         from touchpoints
-       where channel in ('SMS','EMAIL','CALL','VISIT','NOTE')
+       where channel in ${contactChannelSql}
        group by deal_id
     )
     update deals d
@@ -893,7 +945,8 @@ async function main() {
      where newest.deal_id = d.id
        and (d.last_touch_at is null or newest.at > d.last_touch_at)
     returning d.id, floor(date_part('day', now() - newest.at))::int as days
-  `);
+  `)
+    : [];
   const reconciledRows = Array.isArray(reconciled) ? reconciled : reconciled.rows;
   if (reconciledRows.length) {
     console.log(
@@ -930,7 +983,7 @@ async function main() {
       from deals d
       join (select deal_id, max(occurred_at) as at
               from touchpoints
-             where channel in ('SMS','EMAIL','CALL','VISIT','NOTE')
+             where channel in ${contactChannelSql}
              group by deal_id) n
         on n.deal_id = d.id
      where d.last_touch_at is null or n.at > d.last_touch_at

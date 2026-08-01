@@ -13,6 +13,19 @@ import {
 import { COOLING_MONTHS, evaluateRevival, isPriceObjection } from "@/lib/triggers/revival";
 import { evaluateSequence, stepDueAt } from "@/lib/triggers/sequence";
 import { chipForTrigger, describeTrigger, evaluateTrigger } from "@/lib/triggers";
+import {
+  dayInSequence,
+  isAbsent,
+  jobScopeAreas,
+  parseInitialType,
+  parseMonthDay,
+  parseMonthYear,
+  parseRelativeStale,
+  pronounFrom,
+  replyNoteFrom,
+  shortAccountName,
+  splitAreas,
+} from "@/lib/triggers/record-parse";
 import { CHIP_SEQUENCE, CHIP_TRIGGER } from "@/lib/triggers/types";
 import type {
   ContactFacts,
@@ -519,5 +532,128 @@ describe("trigger dispatch", () => {
       seasonal({ contact: { ...yuki, pronoun: "she" } }),
     );
     expect(promo.footnote).toContain("If she does not respond");
+  });
+});
+
+/* -------------------------------------------------------------------------
+   Reading facts out of free text
+   ------------------------------------------------------------------------- */
+
+describe("record parsing", () => {
+  it("reads a completion month off a metric string", () => {
+    expect(parseMonthYear("Aug 2025")?.toDateString()).toBe("Fri Aug 01 2025");
+    expect(parseMonthYear("September 2025")?.getMonth()).toBe(8);
+    expect(parseMonthYear("not a date")).toBeNull();
+    expect(parseMonthYear(null)).toBeNull();
+  });
+
+  it("reads a bare deadline as the next one, never one already missed", () => {
+    expect(parseMonthDay("Aug 15", NOW)?.toDateString()).toBe("Sat Aug 15 2026");
+    // 1 July is behind us on 31 July, so it means next year's.
+    expect(parseMonthDay("Jul 1", NOW)?.getFullYear()).toBe(2027);
+    // Today still counts as live.
+    expect(parseMonthDay("Jul 31", NOW)?.getFullYear()).toBe(2026);
+    expect(parseMonthDay("whenever", NOW)).toBeNull();
+  });
+
+  it("reads the relative strings the cards display", () => {
+    expect(parseRelativeStale("11 mo since job", NOW)?.getMonth()).toBe(7); // Aug 2025
+    expect(parseRelativeStale("lost 6 mo ago", NOW)?.getMonth()).toBe(0); // Jan 2026
+    expect(parseRelativeStale("19d silent", NOW)?.getDate()).toBe(12);
+    expect(parseRelativeStale("promo sent 3d ago", NOW)?.getDate()).toBe(28);
+    expect(parseRelativeStale("booked yesterday", NOW)).toBeNull();
+  });
+
+  it("reads a Biz Dev first-contact date as being in the past", () => {
+    expect(parseInitialType("Site drop-by · Jul 30", NOW)?.toDateString()).toBe(
+      "Thu Jul 30 2026",
+    );
+    // A date ahead of today must mean last year, not a first contact in the future.
+    expect(parseInitialType("Cold call · Dec 2", NOW)?.getFullYear()).toBe(2025);
+    expect(parseInitialType(null, NOW)).toBeNull();
+  });
+
+  it("treats an unfilled field as an absence, never as a fact", () => {
+    for (const empty of [
+      "None — new account",
+      "Not captured yet",
+      "No history on file",
+      "n/a",
+      "unknown",
+      "  ",
+    ]) {
+      expect(isAbsent(empty)).toBe(true);
+    }
+    for (const real of [
+      "Low-VOC",
+      "Benjamin Moore Regal Select · Simply White OC-117",
+      "2,240 sq ft",
+    ]) {
+      expect(isAbsent(real)).toBe(false);
+    }
+  });
+
+  it("takes the painted areas off the completion record and drops bare counts", () => {
+    const job = {
+      body: "Interior repaint completed — 4 rooms, hallway, stairwell · $8,400",
+      structured: null,
+    } as Parameters<typeof jobScopeAreas>[0];
+    expect(jobScopeAreas(job)).toEqual(["hallway", "stairwell"]);
+  });
+
+  it("prefers a structured scope field over the body text", () => {
+    const job = {
+      body: "Interior repaint completed — 4 rooms · $8,400",
+      structured: [{ label: "ROOMS", value: "kitchen, den" }],
+    } as Parameters<typeof jobScopeAreas>[0];
+    expect(jobScopeAreas(job)).toEqual(["kitchen", "den"]);
+  });
+
+  it("yields no areas rather than junk when the record has none", () => {
+    expect(jobScopeAreas(undefined)).toEqual([]);
+    expect(splitAreas("Not captured yet")).toEqual([]);
+    expect(splitAreas(undefined)).toEqual([]);
+  });
+
+  it("reads a pronoun only from what a rep wrote down", () => {
+    expect(pronounFrom("Warm and direct. She replies within the hour.")).toBe("she");
+    expect(pronounFrom("Ask for him at the site office.")).toBe("he");
+    expect(pronounFrom("They handle scheduling for the whole block.")).toBe("they");
+    // A name is not evidence.
+    expect(pronounFrom("Delia Marchetti, homeowner, decision maker")).toBeNull();
+    expect(pronounFrom("")).toBeNull();
+  });
+
+  it("lifts a recorded reply habit verbatim", () => {
+    expect(
+      replyNoteFrom(
+        "Warm, direct, replies within the hour. Daughter's wedding is the real deadline.",
+      ),
+    ).toBe("replies within the hour");
+    expect(replyNoteFrom("Prefers a call on Fridays.")).toBeNull();
+  });
+
+  it("shortens a company name only when it ends in a corporate word", () => {
+    expect(shortAccountName("Northgate Development")).toBe("Northgate");
+    expect(shortAccountName("Vantage Construction Group")).toBe("Vantage Construction");
+    expect(shortAccountName("Nnamdi Holdings")).toBe("Nnamdi");
+    expect(shortAccountName("Redstone Property Management")).toBe("Redstone Property");
+    // Nothing to strip — leave it alone rather than mangle it.
+    expect(shortAccountName("Bright Path Real Estate")).toBe("Bright Path Real Estate");
+    expect(shortAccountName("Meridian")).toBe("Meridian");
+  });
+
+  it("trusts a human-written day label over cumulative arithmetic", () => {
+    const steps = [
+      { stepNumber: 1, label: "Intro email", delayDays: 0 },
+      { stepNumber: 2, label: "Day 3 phone call", delayDays: 3 },
+      { stepNumber: 3, label: "Packet drop", delayDays: 4 },
+    ] as Parameters<typeof dayInSequence>[0];
+    expect(dayInSequence(steps, 1)).toBe(1);
+    expect(dayInSequence(steps, 2)).toBe(3); // from the label, not 0 + 3 + 1
+    // No day in this label, so fall back to the delays that came *before* it:
+    // step 1 (0) + step 2 (3), landing on day 4. Step 3's own delay is how
+    // long until step 4, not how long until itself.
+    expect(dayInSequence(steps, 3)).toBe(4);
   });
 });

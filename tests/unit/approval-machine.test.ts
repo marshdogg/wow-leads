@@ -4,7 +4,7 @@ import {
   toastFor,
   type ApprovalDecision,
 } from "@/lib/agents/approval-toasts";
-import type { ApprovalStatus } from "@/lib/types";
+import type { Approval, ApprovalStatus, TriggerType } from "@/lib/types";
 
 /**
  * The state machine is the product's central promise made mechanical:
@@ -214,7 +214,7 @@ describe("skip suppression", () => {
 describe("next action", () => {
   const now = new Date(2026, 6, 31);
 
-  function approvalWith(triggerType: string) {
+  function approvalWith(triggerType: TriggerType): Approval {
     return {
       id: "a1",
       dealId: "r1",
@@ -229,12 +229,17 @@ describe("next action", () => {
       footnote: "",
       status: "drafted",
       createdAt: now,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any;
+    };
   }
 
   it("always sets a next action, so an approved send is never left unattended", () => {
-    for (const type of ["eleven_month", "seasonal", "revival", "sequence"]) {
+    const types: TriggerType[] = [
+      "eleven_month",
+      "seasonal",
+      "revival",
+      "sequence",
+    ];
+    for (const type of types) {
       const next = nextActionFor(approvalWith(type), now);
       expect(next.label.length).toBeGreaterThan(0);
       expect(next.dueAt.getTime()).toBeGreaterThan(now.getTime());

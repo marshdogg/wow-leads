@@ -16,17 +16,42 @@ test("a card dragged between columns stays there after reload", async ({
   await expect(card).toBeVisible();
   await expect(page.getByTestId("column-past")).toContainText("Ondrej Vasek");
 
-  // dnd-kit needs intermediate moves to register a drag.
-  const from = await card.boundingBox();
-  const to = await target.boundingBox();
-  if (!from || !to) throw new Error("card or target column not laid out");
-  await page.mouse.move(from.x + from.width / 2, from.y + 20);
-  await page.mouse.down();
-  await page.mouse.move(to.x + to.width / 2, to.y + 80, { steps: 20 });
-  await page.mouse.move(to.x + to.width / 2, to.y + 100, { steps: 10 });
-  await page.mouse.up();
+  // Driven through dnd-kit's keyboard sensor rather than a simulated mouse
+  // drag: it is the same `onDragEnd` path, it is deterministic in CI, and it
+  // doubles as the assertion that the board is keyboard-accessible.
+  // The draggable is the wrapper *around* the card, so it is addressed by the
+  // aria-label dnd-kit exposes rather than by the card's own test id.
+  const handle = page.getByLabel(/^Ondrej Vasek\. Press space to pick up/);
+  await expect(handle).toBeVisible();
 
-  await expect(target).toContainText("Ondrej Vasek");
+  // dnd-kit's listeners attach on hydration, but the server-rendered markup
+  // already carries role="button" and tabindex, so the card looks interactive
+  // before it is. Retry the pick-up until dnd-kit's live region acknowledges
+  // it; a redundant Space just drops the card where it already is.
+  const liveRegion = page.locator("[aria-live]").first();
+  await expect
+    .poll(
+      async () => {
+        await handle.focus();
+        await page.keyboard.press("Space");
+        return (await liveRegion.textContent()) ?? "";
+      },
+      { timeout: 20_000 },
+    )
+    .toContain("was moved over droppable area");
+
+  await page.keyboard.press("ArrowRight");
+  await expect(liveRegion).toContainText("droppable area first");
+  await page.keyboard.press("Space");
+
+  await expect(target).toContainText("Ondrej Vasek", { timeout: 20_000 });
+
+  // The assertion above is satisfied by the optimistic update alone. The toast
+  // only fires once the server action has resolved, so wait for it before
+  // reloading — otherwise the reload races the write and reads the old stage.
+  await expect(page.getByTestId("toast")).toContainText("Ondrej Vasek", {
+    timeout: 20_000,
+  });
 
   await page.reload();
   await expect(page.getByTestId("column-first")).toContainText("Ondrej Vasek");
@@ -40,18 +65,29 @@ test("collapse state and list sort persist across a reload", async ({
 }) => {
   await page.goto("/board?pipeline=resi&view=board");
 
+  // Preferences persist per user, so a previous run may have left this
+  // collapsed. Drive to a known state rather than assuming the default.
+  const column = page.getByTestId("column-past");
+  if ((await column.getAttribute("data-collapsed")) === "true") {
+    await page.getByTestId("column-collapse-past").click();
+    await expect(column).toHaveAttribute("data-collapsed", "false");
+  }
   await page.getByTestId("column-collapse-past").click();
-  await expect(page.getByTestId("column-past")).toHaveAttribute(
-    "data-collapsed",
-    "true",
-  );
+  await expect(column).toHaveAttribute("data-collapsed", "true");
 
   await page.goto("/board?pipeline=resi&view=list");
-  await page.getByTestId("list-head-name").click();
-  await expect(page.getByTestId("list-head-name")).toHaveAttribute(
-    "data-sort",
-    "asc",
-  );
+  const head = page.getByTestId("list-head-name");
+  // Sort direction persists per user, so drive to ascending rather than
+  // assuming a default — waiting for each click to settle before re-reading.
+  for (let i = 0; i < 3; i++) {
+    if ((await head.getAttribute("data-sort")) === "asc") break;
+    const before = await head.getAttribute("data-sort");
+    await head.click();
+    await expect
+      .poll(() => head.getAttribute("data-sort"), { timeout: 15_000 })
+      .not.toBe(before);
+  }
+  await expect(head).toHaveAttribute("data-sort", "asc");
 
   await page.reload();
   await expect(page.getByTestId("list-head-name")).toHaveAttribute(
@@ -63,5 +99,12 @@ test("collapse state and list sort persist across a reload", async ({
   await expect(page.getByTestId("column-past")).toHaveAttribute(
     "data-collapsed",
     "true",
+  );
+
+  // Leave the account as we found it — these are real persisted preferences.
+  await page.getByTestId("column-collapse-past").click();
+  await expect(page.getByTestId("column-past")).toHaveAttribute(
+    "data-collapsed",
+    "false",
   );
 });

@@ -109,8 +109,8 @@ export function NeglectedPanel({
             color: "#7ea85c",
           }}
         >
-          Nothing neglected. Every active deal has been touched inside its
-          pipeline&rsquo;s window.
+          Nothing neglected. Every active deal has either been contacted inside
+          its pipeline&rsquo;s window or has a next step booked.
         </div>
       ) : null}
     </div>

@@ -8,8 +8,8 @@
  *
  * The reason is concrete: the field set below was inferred from the v3
  * prototype because the real WOW OS deal-detail screen was not available when
- * this was designed (see the handoff's open questions). When that screen is
- * confirmed, the whole label set is remapped by editing this file — no
+ * this was designed — DECISIONS.md, open question #4. When that screen is
+ * confirmed, the whole label set is remapped by editing this file: no
  * component changes, no re-layout.
  */
 
@@ -48,10 +48,7 @@ export type RecordFieldKey =
   /* suggestions */
   | "suggestionsHeading"
   | "suggestionsNote"
-  | "suggestionDismiss"
-  /* provenance annotation */
-  | "inferredHeading"
-  | "inferredBody";
+  | "suggestionDismiss";
 
 export const RECORD_FIELDS: Record<RecordFieldKey, string> = {
   backLabel: "Pipelines",
@@ -82,10 +79,6 @@ export const RECORD_FIELDS: Record<RecordFieldKey, string> = {
   suggestionsHeading: "Suggestions",
   suggestionsNote: "You approve every send",
   suggestionDismiss: "Dismiss",
-
-  inferredHeading: "INFERRED — CONFIRM AGAINST REAL WOW OS SCREENS",
-  inferredBody:
-    "The Account/Contact record has no counterpart in the Funnel screenshots. Inferred here: the Account-over-Contacts hierarchy on one page (vs. separate pages), the property-detail field set, access notes styled as a caution block, and “assigned by” rendered as a provenance line rather than a field. Confirm the real deal-detail page and I’ll match it exactly.",
 };
 
 /** Every key in {@link RECORD_FIELDS}. Kept explicit so the test can assert
@@ -113,8 +106,6 @@ export const RECORD_FIELD_KEYS: readonly RecordFieldKey[] = [
   "suggestionsHeading",
   "suggestionsNote",
   "suggestionDismiss",
-  "inferredHeading",
-  "inferredBody",
 ];
 
 /* -------------------------------------------------------------------------

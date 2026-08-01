@@ -5,10 +5,17 @@ export interface BoardStat {
   note: string;
 }
 
-/** Three stat cards above the columns. Content is per-pipeline, from analytics. */
+/**
+ * Three stat cards above the columns. Content is per-pipeline, from analytics.
+ *
+ * The prototype draws a checkbox and an ⓘ beside each label; those belong to
+ * its annotation-editor overlay, not to the product, so a card is just
+ * label → value → note.
+ */
 export function KpiStrip({ stats }: { stats: BoardStat[] }) {
   return (
     <div
+      data-testid="kpi-strip"
       style={{
         flex: "none",
         padding: "16px 28px 0",
@@ -30,44 +37,7 @@ export function KpiStrip({ stats }: { stats: BoardStat[] }) {
             padding: "14px 17px",
           }}
         >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              color: "#98a298",
-              fontSize: 13,
-            }}
-          >
-            <span
-              aria-hidden
-              style={{
-                width: 13,
-                height: 13,
-                flex: "none",
-                borderRadius: 3,
-                border: "1.5px solid #6f7a6f",
-              }}
-            />
-            {k.label}
-            <span
-              aria-hidden
-              style={{
-                width: 13,
-                height: 13,
-                flex: "none",
-                borderRadius: "50%",
-                border: "1px solid #3b423a",
-                color: "#6f7a6f",
-                fontSize: 9,
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              i
-            </span>
-          </div>
+          <div style={{ color: "#98a298", fontSize: 13 }}>{k.label}</div>
           <div
             style={{
               fontSize: 28,

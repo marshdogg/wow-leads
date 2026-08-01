@@ -11,8 +11,22 @@ import {
   sequences,
   touchpoints,
 } from "@/db/schema";
+import { isCustomerContactChannel } from "@/lib/repositories/rules";
 import type { ContactChannel, TriggerType } from "@/lib/types";
-import { addDays, addMonths, monthName } from "./dates";
+import { monthName } from "./dates";
+import {
+  dayInSequence,
+  isAbsent,
+  jobScopeAreas,
+  parseInitialType,
+  parseMonthDay,
+  parseMonthYear,
+  parseRelativeStale,
+  pronounFrom,
+  replyNoteFrom,
+  shortAccountName,
+  splitAreas,
+} from "./record-parse";
 import { lowerFirst, unpunctuated } from "./text";
 import type {
   ContactFacts,
@@ -141,9 +155,6 @@ export async function loadFactContext(now: Date): Promise<FactContext> {
    Shared derivations
    ------------------------------------------------------------------------- */
 
-/** Touchpoint channels that count as somebody having spoken to the customer. */
-const CONTACT_CHANNELS = new Set(["SMS", "EMAIL", "CALL", "VISIT"]);
-
 const WORK_TYPE_TAGS = ["INTERIOR", "EXTERIOR", "INDUSTRIAL"];
 
 const BEST_FIT_TAGS = [
@@ -161,25 +172,6 @@ const RELATION_WORDS: Record<string, string> = {
   "HOA BOARD": "HOA",
   "INDUSTRY PARTNER": "partner",
 };
-
-const CORPORATE_SUFFIXES = new Set([
-  "development",
-  "developments",
-  "group",
-  "construction",
-  "holdings",
-  "partners",
-  "properties",
-  "management",
-  "services",
-  "co.",
-  "co",
-  "llc",
-  "inc.",
-  "inc",
-  "corp.",
-  "corp",
-]);
 
 export function contactFacts(ctx: FactContext, deal: DealRow): ContactFacts {
   const list = deal.accountId ? (ctx.contactsByAccount.get(deal.accountId) ?? []) : [];
@@ -204,33 +196,6 @@ function normaliseChannel(value: string | undefined): ContactChannel {
   return upper === "SMS" || upper === "PHONE" ? upper : "EMAIL";
 }
 
-/**
- * Read a pronoun only when a rep has written one down. Names are never used
- * as evidence — guessing wrong here puts a misgendering in a message that
- * goes to a real customer.
- */
-export function pronounFrom(notes: string): "she" | "he" | "they" | null {
-  if (/\b(she|her|hers)\b/i.test(notes)) return "she";
-  if (/\b(he|him|his)\b/i.test(notes)) return "he";
-  if (/\b(they|them|their)\b/i.test(notes)) return "they";
-  return null;
-}
-
-/**
- * A response habit a rep recorded, lifted verbatim: "replies within the hour".
- * Better evidence than anything computed, because a person observed it.
- */
-export function replyNoteFrom(notes: string): string | null {
-  for (const sentence of notes.split(/(?<=[.!?])\s+/)) {
-    if (!/\brepl(?:y|ies|ied)\b/i.test(sentence)) continue;
-    const trimmed = unpunctuated(sentence.trim());
-    // "Warm, direct, replies within the hour" → "replies within the hour"
-    const clause = trimmed.split(",").find((part) => /\brepl/i.test(part)) ?? trimmed;
-    return lowerFirst(clause.trim());
-  }
-  return null;
-}
-
 function replyFacts(ctx: FactContext, deal: DealRow): ReplyFacts {
   const list = deal.accountId ? (ctx.contactsByAccount.get(deal.accountId) ?? []) : [];
   const contact = list.find((c) => c.isPrimary) ?? list[0];
@@ -251,12 +216,19 @@ function dealTouchpoints(ctx: FactContext, deal: DealRow): TouchpointRow[] {
  * (r1's hero timeline is exactly this shape: an approved AI send at 9:14 this
  * morning sitting on top of an 11-month-old job.)
  *
- * Note this is deliberately not `deals.lastTouchAt`, which means last contact
- * of *any* kind, agents included.
+ * Note this is deliberately not `deals.lastTouchAt`, and deliberately
+ * narrower: that field counts `NOTE` as contact, this does not. Same word,
+ * two questions. "Is this deal being ignored?" — a rep who wrote a note
+ * engaged with the account, so a manager alert must not nag them. "Would
+ * sending this talk over a rep?" — a note can be written without anyone
+ * being spoken to, so it must not block a send. r1's September-2025
+ * completion follow-up is the case that separates them: a NOTE that was
+ * plainly a conversation, which should reset the neglect clock but should
+ * not count as a warranty-window contact. Don't align the two.
  */
 function lastHumanContactAt(ctx: FactContext, deal: DealRow): Date | null {
   const human = dealTouchpoints(ctx, deal).filter(
-    (t) => CONTACT_CHANNELS.has(t.channel.toUpperCase()) && !t.byAgent,
+    (t) => isCustomerContactChannel(t.channel.toUpperCase()) && !t.byAgent,
   );
   return human.length ? human[human.length - 1].occurredAt : null;
 }
@@ -273,12 +245,18 @@ function workTypeOf(deal: DealRow): string {
   return tag ? tag.toLowerCase() : "painting";
 }
 
-function scopeFacts(ctx: FactContext, deal: DealRow): ScopeFacts {
+function scopeFacts(
+  ctx: FactContext,
+  deal: DealRow,
+  job?: TouchpointRow,
+): ScopeFacts {
   const workType = workTypeOf(deal);
+  // What this job actually covered beats what the account generally is.
+  const areas = jobScopeAreas(job);
   return {
     summary: `${workType.charAt(0).toUpperCase()}${workType.slice(1)} repaint`,
     workType,
-    areas: scopeAreas(ctx, deal),
+    areas: areas.length > 0 ? areas : scopeAreas(ctx, deal),
     value: metricValue(deal, "LAST JOB") ?? metricValue(deal, "ORIGINAL"),
   };
 }
@@ -295,77 +273,7 @@ export function scopeAreas(ctx: FactContext, deal: DealRow): string[] {
   const detail = account?.details.find((d) =>
     /\b(scope|rooms?|areas?)\b/i.test(d.label),
   );
-  if (!detail) return [];
-  return detail.value
-    .split(/,| and /i)
-    .map((part) => lowerFirst(unpunctuated(part.trim())))
-    .filter((part) => part.length > 0 && part.length < 40);
-}
-
-/* -------------------------------------------------------------------------
-   Display-string parsers — last resort, all total
-   ------------------------------------------------------------------------- */
-
-const MONTH_INDEX: Record<string, number> = {
-  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
-  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
-};
-
-/** "Aug 2025" → 2025-08-01. */
-export function parseMonthYear(value: string | null): Date | null {
-  if (!value) return null;
-  const match = /([A-Za-z]{3,})\s+(\d{4})/.exec(value);
-  if (!match) return null;
-  const month = MONTH_INDEX[match[1].slice(0, 3).toLowerCase()];
-  if (month === undefined) return null;
-  return new Date(Number(match[2]), month, 1);
-}
-
-/**
- * "Aug 15" → the next August 15 at or after `now`, so a bare month/day on a
- * record is read as a live deadline rather than one in the past.
- */
-export function parseMonthDay(value: string | null, now: Date): Date | null {
-  if (!value) return null;
-  const match = /([A-Za-z]{3,})\s+(\d{1,2})\b/.exec(value);
-  if (!match) return null;
-  const month = MONTH_INDEX[match[1].slice(0, 3).toLowerCase()];
-  if (month === undefined) return null;
-  const day = Number(match[2]);
-  const candidate = new Date(now.getFullYear(), month, day);
-  return candidate.getTime() >= startOfToday(now).getTime()
-    ? candidate
-    : new Date(now.getFullYear() + 1, month, day);
-}
-
-function startOfToday(now: Date): Date {
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
-}
-
-/**
- * "11 mo since job" · "lost 6 mo ago" · "19d silent" · "promo sent 3d ago"
- * → the instant that string is describing.
- */
-export function parseRelativeStale(stale: string, now: Date): Date | null {
-  const months = /(\d+)\s*mo\b/.exec(stale);
-  if (months) return addMonths(now, -Number(months[1]));
-  const days = /(\d+)\s*d(?:ays?)?\b/.exec(stale);
-  if (days) return addDays(now, -Number(days[1]));
-  return null;
-}
-
-/** "Site drop-by · Jul 30" → this year's Jul 30, or last year's if ahead of now. */
-export function parseInitialType(value: string | null, now: Date): Date | null {
-  if (!value) return null;
-  const match = /([A-Za-z]{3,})\s+(\d{1,2})\b/.exec(value);
-  if (!match) return null;
-  const month = MONTH_INDEX[match[1].slice(0, 3).toLowerCase()];
-  if (month === undefined) return null;
-  const day = Number(match[2]);
-  const candidate = new Date(now.getFullYear(), month, day);
-  return candidate.getTime() <= now.getTime()
-    ? candidate
-    : new Date(now.getFullYear() - 1, month, day);
+  return splitAreas(detail?.value);
 }
 
 /* -------------------------------------------------------------------------
@@ -379,7 +287,9 @@ export function elevenMonthFacts(
   if (deal.pipelineId !== "resi") return null;
 
   const events = dealTouchpoints(ctx, deal);
-  const jobEvent = [...events].reverse().find((t) => t.channel.toUpperCase() === "JOB");
+  const jobEvent = [...events]
+    .reverse()
+    .find((t) => t.channel.toUpperCase() === "JOB");
   const jobCompletedAt =
     jobEvent?.occurredAt ??
     parseMonthYear(metricValue(deal, "COMPLETED")) ??
@@ -405,7 +315,7 @@ export function elevenMonthFacts(
     jobCompletedAt,
     completionFollowUpAt: followUp,
     lastContactAt: lastHumanContactAt(ctx, deal),
-    scope: scopeFacts(ctx, deal),
+    scope: scopeFacts(ctx, deal, jobEvent),
     replies: replyFacts(ctx, deal),
     now: ctx.now,
   };
@@ -498,9 +408,11 @@ function priorJobNotes(ctx: FactContext, deal: DealRow, workType: string): strin
   if (deal.accountId) {
     const account = ctx.accountsById.get(deal.accountId);
     for (const detail of account?.details ?? []) {
-      if (/\b(preference|paint|finish|colou?r|voc)\b/i.test(detail.label)) {
-        notes.push(`${lowerFirst(unpunctuated(detail.value))} on file`);
-      }
+      if (!/\b(preference|paint|finish|colou?r|voc)\b/i.test(detail.label)) continue;
+      if (isAbsent(detail.value)) continue;
+      const value = lowerFirst(unpunctuated(detail.value));
+      // The record sometimes already says "on file"; don't say it twice.
+      notes.push(/\bon file$/i.test(value) ? value : `${value} on file`);
     }
   }
   return notes;
@@ -604,30 +516,6 @@ export function sequenceFacts(ctx: FactContext, deal: DealRow): SequenceFacts | 
 }
 
 /**
- * Which day of the sequence a step lands on. The seeded step labels usually
- * say ("Day 3 phone call"), and a label a human wrote beats arithmetic;
- * otherwise sum the delays that came before it.
- */
-export function dayInSequence(steps: SequenceStepRow[], stepNumber: number): number {
-  const step = steps.find((s) => s.stepNumber === stepNumber);
-  const labelled = step ? /\bday\s+(\d+)\b/i.exec(step.label) : null;
-  if (labelled) return Number(labelled[1]);
-
-  const cumulative = steps
-    .filter((s) => s.stepNumber < stepNumber)
-    .reduce((total, s) => total + s.delayDays, 0);
-  return cumulative + 1;
-}
-
-/** "Northgate Development" → "Northgate". Left alone when it is already short. */
-export function shortAccountName(name: string): string {
-  const words = name.split(/\s+/);
-  if (words.length < 2) return name;
-  const last = words[words.length - 1].toLowerCase();
-  return CORPORATE_SUFFIXES.has(last) ? words.slice(0, -1).join(" ") : name;
-}
-
-/**
  * A named account we can point at as proof. It has to be a real, active
  * account of the same type as the prospect — that is what makes it a usable
  * reference rather than a boast.
@@ -671,3 +559,5 @@ function groupBy<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {
   }
   return map;
 }
+
+export * from "./record-parse";

@@ -101,6 +101,9 @@ export default async function SwitcherPage({
         deals={deals}
         stats={stats}
         prefs={prefs}
+        // Same selector as the board, addressed as `switcher-<id>` here so the
+        // e2e suite can tell which screen it is driving.
+        testIdPrefix="switcher"
       />
     </>
   );

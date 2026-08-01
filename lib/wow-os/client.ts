@@ -25,9 +25,11 @@
  *      "Estimate Scheduled" because nothing here can advance an estimate to
  *      "In Progress" or "Complete"; only the Funnel knows that.
  *   3. Ignore `EstimateStore` / `DbEstimateStore` entirely and delete them.
- *      The JOB touchpoint they write exists purely so the in-memory adapter
- *      survives a page reload; once the Funnel is the store of record it owns
- *      the estimate and that touchpoint is a duplicate.
+ *      They exist only so the in-memory adapter can reconstruct an estimate
+ *      after a reload, by reading the deal row `bookDeal` wrote. A real Funnel
+ *      is its own store of record and needs none of it. Note that this adapter
+ *      writes nothing — the touchpoint on the Record timeline is `bookDeal`'s,
+ *      and it stays exactly as it is after the swap.
  *   4. Map WOW Leads deal ids to Funnel deal ids if the Funnel does not accept
  *      ours. Add the mapping here, not in the caller.
  *
@@ -44,7 +46,7 @@
  */
 
 import { eq } from "drizzle-orm";
-import { deals, touchpoints } from "@/db/schema";
+import { deals } from "@/db/schema";
 import { generateOsRef, isValidOsRef } from "./booking";
 
 /**
@@ -99,6 +101,7 @@ export interface WowOsClient {
 }
 
 
+
 /* -------------------------------------------------------------------------
    Persistence port
    ------------------------------------------------------------------------- */
@@ -107,18 +110,27 @@ export interface WowOsClient {
  * REAL-INTEGRATION NOTE: this whole port disappears with the in-memory client.
  * A real Funnel API is its own store of record and needs none of it.
  *
- * It exists because the in-memory adapter has to survive a page reload — and
- * because a port makes the round trip unit-testable without a database.
+ * It exists for two reasons: the in-memory adapter has to survive a page
+ * reload, and a port makes the round trip unit-testable without a database.
+ *
+ * Note what is *not* here: a write. `bookDeal` already persists everything the
+ * in-memory Funnel needs — `deals.os_ref` and, on `deals.next_due`, the
+ * appointment as `"<when> · <estimator>"` — and it logs the Funnel-authored
+ * JOB touchpoint that the Record timeline renders. This adapter used to write
+ * its own near-identical JOB row on top of that, which put two almost-the-same
+ * entries on the timeline one second apart. Reconstructing from the deal row
+ * instead means one write, one timeline entry, and nothing to keep in sync.
  */
 export interface EstimateStore {
   /** Is this ref already taken? Guards against a five-digit collision. */
   osRefExists(osRef: string): Promise<boolean>;
-  /** The account a deal belongs to, for the touchpoint's account link. */
-  accountIdForDeal(dealId: string): Promise<string | null>;
-  /** Writes the estimate to `deals.os_ref`'s neighbouring touchpoint. */
-  save(record: StoredEstimate): Promise<void>;
   /** Null when the Funnel has never heard of this ref. */
   load(osRef: string): Promise<StoredEstimate | null>;
+  /**
+   * Optional: only stores with no other source of truth implement this. The
+   * database-backed store deliberately does not — see above.
+   */
+  save?(record: StoredEstimate): Promise<void>;
 }
 
 export interface StoredEstimate {
@@ -126,27 +138,29 @@ export interface StoredEstimate {
   dealId: string;
   when: string;
   estimator: string;
-  carries: string[];
-  body: string;
-  accountId: string | null;
 }
 
-const FUNNEL_AUTHOR = "WOW OS Funnel";
-const FUNNEL_INITIALS = "OS";
-
-/** Structured-field labels the read-back parses out again. */
-const FIELD_WHEN = "When";
-const FIELD_ESTIMATOR = "Estimator";
-const FIELD_ESTIMATE = "Estimate";
-const FIELD_CARRIES = "Carries";
-
-const touchpointId = (osRef: string) => `tp-os-${osRef.toLowerCase()}`;
+/** `bookDeal` writes `next_due` as `"<whenLabel> · <estimatorName>"`. */
+function splitNextDue(nextDue: string | null): {
+  when: string;
+  estimator: string;
+} {
+  const at = nextDue?.indexOf(" · ") ?? -1;
+  if (!nextDue || at === -1) {
+    // A deal can carry an osRef seeded straight into the fixtures without ever
+    // going through the booking flow (the demo's EST-40218 does). That estimate
+    // is real — report it as scheduled with the detail we do not have.
+    return { when: "Scheduled", estimator: "Unassigned" };
+  }
+  return {
+    when: nextDue.slice(0, at),
+    estimator: nextDue.slice(at + 3),
+  };
+}
 
 /**
- * Durability for the in-memory adapter: the ref lives on `deals.os_ref` (set
- * by `bookDeal`) and the appointment detail on a JOB touchpoint. `JOB` is the
- * channel the prototype uses for Funnel-side timeline events, so the entry
- * reads correctly in the Record screen's provenance list.
+ * Durability for the in-memory adapter, read straight off the deal row that
+ * `bookDeal` writes. Read-only by design.
  */
 export class DbEstimateStore implements EstimateStore {
   async osRefExists(osRef: string): Promise<boolean> {
@@ -159,84 +173,18 @@ export class DbEstimateStore implements EstimateStore {
     return rows.length > 0;
   }
 
-  async accountIdForDeal(dealId: string): Promise<string | null> {
-    const db = await database();
-    const rows = await db
-      .select({ accountId: deals.accountId })
-      .from(deals)
-      .where(eq(deals.id, dealId))
-      .limit(1);
-    return rows[0]?.accountId ?? null;
-  }
-
-  async save(record: StoredEstimate): Promise<void> {
-    const db = await database();
-    await db.insert(touchpoints).values({
-      id: touchpointId(record.osRef),
-      dealId: record.dealId,
-      accountId: record.accountId,
-      channel: "JOB",
-      body: record.body,
-      who: FUNNEL_AUTHOR,
-      byAgent: false,
-      initials: FUNNEL_INITIALS,
-      structured: [
-        { label: FIELD_WHEN, value: record.when },
-        { label: FIELD_ESTIMATOR, value: record.estimator },
-        { label: FIELD_ESTIMATE, value: record.osRef },
-        { label: FIELD_CARRIES, value: record.carries.join(" · ") },
-      ],
-      occurredAt: new Date(),
-    });
-  }
-
   async load(osRef: string): Promise<StoredEstimate | null> {
     const db = await database();
     const rows = await db
-      .select({
-        dealId: touchpoints.dealId,
-        accountId: touchpoints.accountId,
-        body: touchpoints.body,
-        structured: touchpoints.structured,
-      })
-      .from(touchpoints)
-      .where(eq(touchpoints.id, touchpointId(osRef)))
+      .select({ id: deals.id, nextDue: deals.nextDue })
+      .from(deals)
+      .where(eq(deals.osRef, osRef))
       .limit(1);
 
     const row = rows[0];
-    if (!row) {
-      // A deal can carry an osRef seeded straight into the fixtures, with no
-      // matching touchpoint (the demo's EST-40218 does). That estimate is
-      // real — report it as scheduled with the detail we do not have.
-      const seeded = await db
-        .select({ id: deals.id })
-        .from(deals)
-        .where(eq(deals.osRef, osRef))
-        .limit(1);
-      if (!seeded[0]) return null;
-      return {
-        osRef,
-        dealId: seeded[0].id,
-        when: "Scheduled",
-        estimator: "Unassigned",
-        carries: [],
-        body: "",
-        accountId: null,
-      };
-    }
+    if (!row) return null;
 
-    const find = (label: string) =>
-      row.structured?.find((f) => f.label === label)?.value ?? "";
-
-    return {
-      osRef,
-      dealId: row.dealId,
-      when: find(FIELD_WHEN) || "Scheduled",
-      estimator: find(FIELD_ESTIMATOR) || "Unassigned",
-      carries: find(FIELD_CARRIES) ? find(FIELD_CARRIES).split(" · ") : [],
-      body: row.body,
-      accountId: row.accountId,
-    };
+    return { osRef, dealId: row.id, ...splitNextDue(row.nextDue) };
   }
 }
 
@@ -248,10 +196,6 @@ export class MemoryEstimateStore implements EstimateStore {
     return this.rows.has(osRef);
   }
 
-  async accountIdForDeal(): Promise<string | null> {
-    return null;
-  }
-
   async save(record: StoredEstimate): Promise<void> {
     this.rows.set(record.osRef, record);
   }
@@ -260,7 +204,6 @@ export class MemoryEstimateStore implements EstimateStore {
     return this.rows.get(osRef) ?? null;
   }
 }
-
 /* -------------------------------------------------------------------------
    In-memory implementation (the default, and the one v1 ships with)
    ------------------------------------------------------------------------- */
@@ -273,14 +216,14 @@ export class InMemoryWowOsClient implements WowOsClient {
   ): Promise<{ osRef: string }> {
     const osRef = await this.mintUniqueOsRef();
 
-    await this.store.save({
+    // Against the database-backed store this is a no-op: the caller runs
+    // `bookDeal` immediately after, and that write is what makes the estimate
+    // readable. In-memory stores (tests) have nowhere else to put it.
+    await this.store.save?.({
       osRef,
       dealId: input.dealId,
       when: input.when,
       estimator: input.estimatorName,
-      carries: input.carries,
-      body: `Estimate scheduled in the WOW OS Funnel — ${input.when} · ${input.estimatorName} · ${osRef}`,
-      accountId: await this.store.accountIdForDeal(input.dealId),
     });
 
     return { osRef };

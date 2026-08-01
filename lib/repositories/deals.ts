@@ -3,7 +3,7 @@
  * the UI, so a drag/drop, an API call and a script all get the same answer.
  */
 
-import { and, asc, count, eq, isNotNull } from "drizzle-orm";
+import { and, asc, count, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { deals, pipelines, stages, touchpoints } from "@/db/schema";
 import { appendAudit } from "./audit";
@@ -334,19 +334,23 @@ export async function getNeglectedDeals(): Promise<NeglectedDeal[]> {
       metrics: deals.metrics,
       lastTouchAt: deals.lastTouchAt,
       nextState: deals.nextState,
+      createdAt: deals.createdAt,
       neglectDays: pipelines.neglectDays,
     })
     .from(deals)
     .innerJoin(stages, eq(deals.stageId, stages.id))
-    .innerJoin(pipelines, eq(deals.pipelineId, pipelines.id))
-    .where(isNotNull(deals.lastTouchAt));
+    .innerJoin(pipelines, eq(deals.pipelineId, pipelines.id));
 
   const now = new Date();
   const neglected: NeglectedDeal[] = [];
   for (const r of rows) {
-    const lastTouchAt = r.lastTouchAt;
     const nextState = (r.nextState as NextActionState | null) ?? null;
-    if (!isNeglected(lastTouchAt, r.neglectDays, now, nextState) || !lastTouchAt) {
+    // Never contacted? Measure the silence from when the record was created.
+    const since = r.lastTouchAt ?? r.createdAt;
+    if (
+      !isNeglected(r.lastTouchAt, r.neglectDays, now, nextState, r.createdAt) ||
+      !since
+    ) {
       continue;
     }
     neglected.push({
@@ -356,7 +360,7 @@ export async function getNeglectedDeals(): Promise<NeglectedDeal[]> {
       pipeline: PIPELINE_SHORT_LABEL[r.pipelineId] ?? r.pipelineId,
       stage: STAGE_SHORT_LABEL[r.stageId] ?? r.stageLabel,
       value: neglectValue(r.metrics),
-      days: daysSince(lastTouchAt, now),
+      days: daysSince(since, now),
     });
   }
   return neglected.sort((a, b) => b.days - a.days);

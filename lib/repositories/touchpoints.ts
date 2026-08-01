@@ -7,10 +7,10 @@
 
 import { desc, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { deals, touchpoints } from "@/db/schema";
+import { deals, touchpoints, users } from "@/db/schema";
 import { appendAudit } from "./audit";
 import { toTouchpoint } from "./mappers";
-import { formatDue } from "./rules";
+import { AGENT_NAMES, formatDue, resolveProvenance } from "./rules";
 import type { Touchpoint, TouchpointChannel } from "@/lib/types";
 
 const MS_DAY = 86_400_000;
@@ -47,6 +47,14 @@ export interface LogTouchpointInput {
 export async function logTouchpoint(
   input: LogTouchpointInput,
 ): Promise<Touchpoint> {
+  // Fail before writing rather than after: `appendAudit` rejects an actorless
+  // write, and by then the touchpoint row already exists.
+  if (!input.actorUserId && !input.agentId) {
+    throw new Error(
+      `logTouchpoint: ${input.dealId} named no actor — every touch has an author.`,
+    );
+  }
+
   const [deal] = await db
     .select()
     .from(deals)
@@ -54,15 +62,28 @@ export async function logTouchpoint(
     .limit(1);
   if (!deal) throw new Error(`Deal "${input.dealId}" not found.`);
 
-  const byAgent = input.byAgent ?? !!input.agentId;
-  const who =
-    input.who ??
-    (byAgent
-      ? deal.ownerIsAgent
-        ? deal.ownerName
-        : "WOW Leads automation"
-      : deal.ownerName);
-  const initials = input.initials ?? (byAgent ? "AI" : deal.ownerInitials);
+  // Resolve the *actor*, not the deal's owner. A rep logging a call on an
+  // agent-owned card is still the rep.
+  const [actorRow] = input.actorUserId
+    ? await db
+        .select({ name: users.name, initials: users.initials })
+        .from(users)
+        .where(eq(users.id, input.actorUserId))
+        .limit(1)
+    : [];
+
+  const { who, byAgent, initials } = resolveProvenance({
+    who: input.who,
+    byAgent: input.byAgent,
+    initials: input.initials,
+    actor: actorRow ?? null,
+    agentName: input.agentId ? (AGENT_NAMES[input.agentId] ?? null) : null,
+    dealOwner: {
+      name: deal.ownerName,
+      initials: deal.ownerInitials,
+      isAgent: deal.ownerIsAgent,
+    },
+  });
 
   const now = new Date();
   const [row] = await db

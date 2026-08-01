@@ -7,7 +7,15 @@ import {
   staleDays,
 } from "@/lib/fixtures/time";
 import { PIPELINE_IDS, PIPES } from "@/lib/pipelines";
-import { daysSince, formatDue, isNeglected } from "@/lib/repositories/rules";
+import {
+  AGENT_NAMES,
+  daysSince,
+  formatDue,
+  isContactChannel,
+  isCustomerContactChannel,
+  isNeglected,
+  resolveProvenance,
+} from "@/lib/repositories/rules";
 
 const MS_DAY = 86_400_000;
 /** A fixed Friday so weekday-relative due strings are deterministic. */
@@ -34,8 +42,23 @@ describe("neglect threshold", () => {
     expect(isNeglected(ago(45), 45, NOW)).toBe(true);
   });
 
-  it("does not neglect a deal nobody has touched yet", () => {
+  it("measures a never-contacted deal from when the record was created", () => {
+    // Sitting in Identified for a month with no call is the most neglected
+    // thing on the board, not an exemption.
+    expect(isNeglected(null, 14, NOW, null, ago(30))).toBe(true);
+    // Added yesterday is simply new.
+    expect(isNeglected(null, 14, NOW, null, ago(1))).toBe(false);
+  });
+
+  it("cannot judge a deal with neither a touch nor a creation date", () => {
     expect(isNeglected(null, 14, NOW)).toBe(false);
+  });
+
+  it("spares any deal with an on-time next action, however long the silence", () => {
+    expect(isNeglected(ago(400), 14, NOW, "ok")).toBe(false);
+    expect(isNeglected(null, 14, NOW, "ok", ago(400))).toBe(false);
+    expect(isNeglected(ago(400), 14, NOW, "overdue")).toBe(true);
+    expect(isNeglected(ago(400), 14, NOW, null)).toBe(true);
   });
 
   it("does not neglect a touch in the future (clock skew)", () => {
@@ -50,6 +73,98 @@ describe("neglect threshold", () => {
   it("counts whole elapsed days", () => {
     expect(daysSince(ago(21), NOW)).toBe(21);
     expect(daysSince(ago(0.5), NOW)).toBe(0);
+  });
+});
+
+describe("contact channels", () => {
+  it("counts a note as engagement — it resets the silence clock", () => {
+    expect(isContactChannel("NOTE")).toBe(true);
+  });
+
+  it("does not count a note as reaching the customer", () => {
+    // A rep jotting "left a voicemail, will retry" has not had a conversation,
+    // and letting that block an agent send would silence the queue.
+    expect(isCustomerContactChannel("NOTE")).toBe(false);
+  });
+
+  it("never counts system events as either", () => {
+    for (const channel of ["TRIGGER", "JOB", "SOURCE"]) {
+      expect(isContactChannel(channel)).toBe(false);
+      expect(isCustomerContactChannel(channel)).toBe(false);
+    }
+  });
+
+  it("agrees on the four real outreach channels", () => {
+    for (const channel of ["SMS", "EMAIL", "CALL", "VISIT"]) {
+      expect(isContactChannel(channel)).toBe(true);
+      expect(isCustomerContactChannel(channel)).toBe(true);
+    }
+  });
+});
+
+describe("touchpoint provenance", () => {
+  // r1 is owned by the Re-marketing agent, so the deal owner is an agent even
+  // when a person is the one doing the work. That is what made this wrong.
+  const agentOwned = {
+    name: "Re-marketing agent",
+    initials: "AI",
+    isAgent: true,
+  };
+  const marshall = { name: "Marshall Behrns", initials: "MB" };
+
+  it("names the person, not the deal's owner, when a rep logs on an AI-owned card", () => {
+    expect(
+      resolveProvenance({ actor: marshall, dealOwner: agentOwned }),
+    ).toEqual({ who: "Marshall Behrns", byAgent: false, initials: "MB" });
+  });
+
+  it("names the agent when an agent acts alone", () => {
+    expect(
+      resolveProvenance({
+        agentName: AGENT_NAMES["agent-remarketing"],
+        dealOwner: agentOwned,
+      }),
+    ).toEqual({ who: "Re-marketing agent", byAgent: true, initials: "AI" });
+  });
+
+  it("names both when an agent drafted and a person approved", () => {
+    expect(
+      resolveProvenance({
+        actor: marshall,
+        agentName: AGENT_NAMES["agent-prospecting"],
+        dealOwner: agentOwned,
+      }),
+    ).toEqual({
+      who: "Prospecting agent · approved by Marshall Behrns",
+      byAgent: true,
+      initials: "AI",
+    });
+  });
+
+  it("lets an explicit who win", () => {
+    const p = resolveProvenance({
+      who: "WOW Leads automation",
+      byAgent: true,
+      actor: marshall,
+      dealOwner: agentOwned,
+    });
+    expect(p.who).toBe("WOW Leads automation");
+    expect(p.byAgent).toBe(true);
+  });
+
+  it("falls back to the deal owner only when there is no actor at all", () => {
+    expect(resolveProvenance({ dealOwner: agentOwned }).who).toBe(
+      "Re-marketing agent",
+    );
+  });
+
+  it("never marks a human touch as agent work", () => {
+    const p = resolveProvenance({
+      actor: marshall,
+      dealOwner: { name: "Dani Koval", initials: "DK", isAgent: false },
+    });
+    expect(p.byAgent).toBe(false);
+    expect(p.initials).toBe("MB");
   });
 });
 
@@ -127,6 +242,17 @@ describe("stale strings map to real timestamps", () => {
       ),
     ).map((d) => d.id);
     expect(neglected.sort()).toEqual(["b4", "p5", "r4"]);
+  });
+
+  it("keeps a never-contacted lead off the list while its intro call stands", () => {
+    // p4 Halvorsen has never been contacted, but there is an intro call booked
+    // for Friday. Cancel it and the lead is exactly what neglect means.
+    const p4 = DEAL_FIXTURES.find((d) => d.id === "p4")!;
+    expect(staleDays(p4.stale)).toBeNull();
+    expect(p4.next?.state).toBe("ok");
+    const createdAt = ago(18);
+    expect(isNeglected(null, 14, NOW, "ok", createdAt)).toBe(false);
+    expect(isNeglected(null, 14, NOW, null, createdAt)).toBe(true);
   });
 
   it("spares a long-silent deal that has a next action booked", () => {

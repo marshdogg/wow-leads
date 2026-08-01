@@ -42,6 +42,7 @@ export function BoardHeader({
     >
       <div>
         <h1
+          data-testid="board-title"
           style={{
             margin: 0,
             fontSize: 28,
@@ -69,6 +70,7 @@ export function BoardHeader({
           <div
             role="group"
             aria-label="Track filter"
+            data-testid="track-filter"
             style={{
               display: "flex",
               background: "#141814",
@@ -115,7 +117,7 @@ export function BoardHeader({
           <button
             type="button"
             onClick={onToggleAll}
-            data-testid="toggle-all"
+            data-testid="collapse-all"
             className="hover:!border-[#4b9c2d] hover:!text-[#b6f07a]"
             style={{
               fontSize: 13,
@@ -187,6 +189,7 @@ function SegmentedItem({
       onClick={onClick}
       aria-pressed={active}
       data-testid={testId}
+      data-active={active ? "true" : "false"}
       style={{
         display: "flex",
         alignItems: "center",

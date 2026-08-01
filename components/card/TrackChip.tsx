@@ -1,6 +1,6 @@
 import type { TrackStyle } from "@/lib/types";
 
-/** The track (or AUTOMATED) chip. `size` matches the board card vs. list row. */
+/** The track (or AUTOMATED) chip. Row padding is a touch wider than the card's. */
 export function TrackChip({
   track,
   size = "card",
@@ -12,7 +12,7 @@ export function TrackChip({
     <span
       style={{
         fontSize: 9,
-        letterSpacing: size === "card" ? "0.9px" : "0.9px",
+        letterSpacing: "0.9px",
         fontWeight: 700,
         padding: size === "card" ? "3px 7px" : "4px 8px",
         borderRadius: 4,
@@ -27,9 +27,10 @@ export function TrackChip({
   );
 }
 
-/** Pulsing AI chip. `AI DRAFTED` on the card, a bare `AI` beside a list name. */
-export function AiDraftChip({ label = "AI DRAFTED" }: { label?: string }) {
-  const compact = label === "AI";
+/**
+ * Pulsing AI chip: `AI DRAFTED` on a card, a bare `AI` beside a list-row name.
+ */
+export function AiDraftChip({ compact = false }: { compact?: boolean }) {
   return (
     <span
       style={{
@@ -58,7 +59,7 @@ export function AiDraftChip({ label = "AI DRAFTED" }: { label?: string }) {
           animation: "wowPulse 1.6s ease-in-out infinite",
         }}
       />
-      {label}
+      {compact ? "AI" : "AI DRAFTED"}
     </span>
   );
 }

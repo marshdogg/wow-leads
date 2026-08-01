@@ -3,7 +3,6 @@ import { tagStyle } from "@/lib/pipelines";
 import { RECORD_FIELDS } from "@/lib/record-fields";
 import { ActivityTimeline } from "./ActivityTimeline";
 import { ContactsPanel } from "./ContactsPanel";
-import { InferredNote } from "./InferredNote";
 import { MetaPanel } from "./MetaPanel";
 import { NextStepPanel } from "./NextStepPanel";
 import { PropertyPanel } from "./PropertyPanel";
@@ -132,7 +131,6 @@ export function RecordScreen({ view }: { view: RecordView }) {
             accessNotes={view.accessNotes}
           />
           <ActivityTimeline timeline={view.timeline} />
-          <InferredNote />
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>

@@ -2,15 +2,22 @@
 
 import type { PipelineConfig, PipelineId } from "@/lib/types";
 
-/** Four pipeline cards. Selecting one also resets the track filter. */
+/**
+ * Pipeline cards. Selecting one also resets the track filter.
+ *
+ * `testIdPrefix` exists so the Switcher can reuse this selector under its own
+ * test ids (`switcher-comm`) without forking the component.
+ */
 export function PipelineSelector({
   pipelines,
   selected,
   onSelect,
+  testIdPrefix = "pipeline",
 }: {
   pipelines: PipelineConfig[];
   selected: PipelineId;
   onSelect: (id: PipelineId) => void;
+  testIdPrefix?: string;
 }) {
   return (
     <div style={{ flex: "none", padding: "16px 28px 0" }}>
@@ -23,7 +30,7 @@ export function PipelineSelector({
               type="button"
               onClick={() => onSelect(p.id)}
               aria-pressed={on}
-              data-testid={`pipeline-${p.id}`}
+              data-testid={`${testIdPrefix}-${p.id}`}
               className="hover:!border-[#4b9c2d]"
               style={{
                 border: `1px solid ${on ? "#4b9c2d" : "#262b25"}`,

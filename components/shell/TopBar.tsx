@@ -8,13 +8,8 @@ export function TopBar({ approvalCount }: { approvalCount: number }) {
   const pending = approvalCount > 0;
   return (
     <div
-      style={{
-        flex: "none",
-        padding: "18px 28px 0",
-        display: "flex",
-        gap: 12,
-        alignItems: "center",
-      }}
+      className="flex items-center gap-3 px-4 pt-4 sm:px-7 sm:pt-[18px]"
+      style={{ flex: "none" }}
     >
       <div
         style={{
@@ -30,8 +25,10 @@ export function TopBar({ approvalCount }: { approvalCount: number }) {
           color: "#6f7a6f",
         }}
       >
-        <Search size={15} strokeWidth={2} />
-        <span style={{ fontSize: 15 }}>Search contacts, accounts, bids</span>
+        <Search size={15} strokeWidth={2} className="shrink-0" />
+        <span className="truncate" style={{ fontSize: 15 }}>
+          Search contacts, accounts, bids
+        </span>
       </div>
       <Link
         href="/approvals"
@@ -65,7 +62,10 @@ export function TopBar({ approvalCount }: { approvalCount: number }) {
         >
           AI
         </div>
+        {/* On a phone the chip keeps the badge and the count but drops the
+            words — the full label is what pushed the bar past the viewport. */}
         <span
+          className="hidden sm:inline"
           style={{
             fontSize: 13,
             color: pending ? "#b6f07a" : "#8b948b",
@@ -74,6 +74,16 @@ export function TopBar({ approvalCount }: { approvalCount: number }) {
           }}
         >
           {pending ? `${approvalCount} awaiting approval` : "Queue clear"}
+        </span>
+        <span
+          className="sm:hidden"
+          style={{
+            fontSize: 13,
+            color: pending ? "#b6f07a" : "#8b948b",
+            fontWeight: 500,
+          }}
+        >
+          {pending ? approvalCount : "0"}
         </span>
       </Link>
     </div>

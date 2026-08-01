@@ -37,14 +37,23 @@ export function BoardScreen({
   deals: initialDeals,
   stats,
   prefs,
+  pipelineParam = "pipeline",
+  testIdPrefix,
 }: {
   pipelines: PipelineConfig[];
   pipeline: PipelineConfig;
   deals: Deal[];
   stats: BoardStat[];
   prefs: BoardPrefs;
+  /**
+   * Query-param name holding the selected pipeline. The Switcher renders this
+   * same board at `/switcher?pipe=comm` and must not write `/board`'s param.
+   */
+  pipelineParam?: string;
+  /** Test-id prefix for the selector cards. Defaults to `pipeline-<id>`. */
+  testIdPrefix?: string;
 }) {
-  const [pipe, setPipe] = useQueryState("pipeline", pipelineParser);
+  const [pipe, setPipe] = useQueryState(pipelineParam, pipelineParser);
   const [{ track, view }, setViewState] = useQueryStates(
     { track: trackParser, view: viewParser },
     { history: "replace" },
@@ -154,6 +163,7 @@ export function BoardScreen({
         pipelines={pipelines}
         selected={pipe}
         onSelect={selectPipeline}
+        testIdPrefix={testIdPrefix}
       />
 
       <BoardHeader

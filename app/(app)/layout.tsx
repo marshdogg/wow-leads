@@ -1,31 +1,26 @@
-import { sql } from "drizzle-orm";
-import { db } from "@/db";
 import { LeftRail } from "@/components/shell/LeftRail";
 import { TopBar } from "@/components/shell/TopBar";
 import { Toast } from "@/components/shell/Toast";
+import { getNeglectedDeals } from "@/lib/repositories/deals";
+import { getPendingApprovals } from "@/lib/repositories/approvals";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Counts for the rail badges and the top-bar approval chip. Kept inline
- * rather than in a repository because they are read-only and the layout is
- * the only consumer.
+ * Counts for the rail badges and the top-bar approval chip. These go through
+ * the same repository functions the Manager dashboard and Approvals queue
+ * use — a second hand-written query here would drift from the per-pipeline
+ * neglect rule and the badge would contradict the screen it links to.
  */
 async function railCounts() {
   try {
-    const pending = await db.execute<{ n: number }>(
-      sql`select count(*)::int as n from approvals where status = 'drafted'`,
-    );
-    const neglected = await db.execute<{ n: number }>(
-      sql`select count(*)::int as n
-          from deals d
-          join pipelines p on p.id = d.pipeline_id
-          where d.last_touch_at is null
-             or d.last_touch_at < now() - (p.neglect_days || ' days')::interval`,
-    );
+    const [approvals, neglected] = await Promise.all([
+      getPendingApprovals(),
+      getNeglectedDeals(),
+    ]);
     return {
-      approvalCount: Number(pending.rows[0]?.n ?? 0),
-      neglectedCount: Number(neglected.rows[0]?.n ?? 0),
+      approvalCount: approvals.length,
+      neglectedCount: neglected.length,
     };
   } catch {
     // The shell must render even before the first migration/seed lands.

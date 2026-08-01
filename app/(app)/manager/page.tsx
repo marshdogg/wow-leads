@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { DashPanel } from "@/components/manager/DashPanel";
-import { FutureStateNote } from "@/components/manager/FutureStateNote";
 import { Leaderboard } from "@/components/manager/Leaderboard";
 import { NeglectedPanel } from "@/components/manager/NeglectedPanel";
 import { PipelineHealth } from "@/components/manager/PipelineHealth";
@@ -80,7 +79,6 @@ export default async function ManagerPage() {
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
           <PipelineHealth rows={health} />
           <ProspectMetrics stats={prospectMetrics} />
-          <FutureStateNote />
         </div>
       </div>
     </div>

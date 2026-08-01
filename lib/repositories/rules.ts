@@ -49,6 +49,109 @@ export function assertStageInPipeline(
 }
 
 /* -------------------------------------------------------------------------
+   Provenance
+   ------------------------------------------------------------------------- */
+
+/** Display names for the two drafting agents. */
+export const AGENT_NAMES: Record<string, string> = {
+  "agent-remarketing": "Re-marketing agent",
+  "agent-prospecting": "Prospecting agent",
+};
+
+export interface ProvenanceInput {
+  /** Explicit override — wins over everything. */
+  who?: string;
+  byAgent?: boolean;
+  initials?: string;
+  /** The person who performed it, resolved from `actorUserId`. */
+  actor?: { name: string; initials: string } | null;
+  /** The agent that performed or drafted it, resolved from `agentId`. */
+  agentName?: string | null;
+  /** Last-resort fallback only. */
+  dealOwner: { name: string; initials: string; isAgent: boolean };
+}
+
+/**
+ * Who a touchpoint says did it.
+ *
+ * Resolved from the **actor**, never from the deal's owner. Those are
+ * different things: a rep logging a call on an agent-owned card is still the
+ * rep, and deriving the display line from `deal.ownerName` records Marshall's
+ * phone call as the work of the Re-marketing agent.
+ *
+ * When an agent drafted and a person approved, both are named — that pairing
+ * is the whole point of the provenance line on the Record screen.
+ */
+export function resolveProvenance(input: ProvenanceInput): {
+  who: string;
+  byAgent: boolean;
+  initials: string;
+} {
+  const { actor, agentName, dealOwner } = input;
+
+  const byAgent = input.byAgent ?? Boolean(agentName);
+
+  const who =
+    input.who ??
+    (agentName && actor
+      ? `${agentName} · approved by ${actor.name}`
+      : (agentName ?? actor?.name ?? dealOwner.name));
+
+  const initials =
+    input.initials ??
+    (byAgent ? "AI" : (actor?.initials ?? dealOwner.initials));
+
+  return { who, byAgent, initials };
+}
+
+/* -------------------------------------------------------------------------
+   Channels
+   ------------------------------------------------------------------------- */
+
+/**
+ * "Did a human engage with this account?" — resets the silence clock and feeds
+ * `deals.lastTouchAt`.
+ *
+ * Includes NOTE: a rep who wrote something down engaged with the account, and
+ * nagging them the next morning is how a manager alert loses credibility.
+ * Excludes TRIGGER, JOB and SOURCE — those record something happening *to* an
+ * account, not someone attending to it, so "Record created" must never make an
+ * un-worked lead look freshly handled.
+ */
+export const CONTACT_CHANNELS = [
+  "SMS",
+  "EMAIL",
+  "CALL",
+  "VISIT",
+  "NOTE",
+] as const;
+
+/**
+ * "Did we actually reach the customer?" — the stricter gate that decides
+ * whether sending would talk over a person.
+ *
+ * Excludes NOTE, because a note can be internal: a rep jotting "left a
+ * voicemail, will retry" has not had a conversation, and letting that block an
+ * agent send would silence the queue on a technicality.
+ *
+ * Same word, two questions, two correct answers. Do not collapse these.
+ */
+export const CUSTOMER_CONTACT_CHANNELS = [
+  "SMS",
+  "EMAIL",
+  "CALL",
+  "VISIT",
+] as const;
+
+export function isContactChannel(channel: string): boolean {
+  return (CONTACT_CHANNELS as readonly string[]).includes(channel);
+}
+
+export function isCustomerContactChannel(channel: string): boolean {
+  return (CUSTOMER_CONTACT_CHANNELS as readonly string[]).includes(channel);
+}
+
+/* -------------------------------------------------------------------------
    Neglect
    ------------------------------------------------------------------------- */
 
@@ -72,19 +175,22 @@ export function daysSince(lastTouchAt: Date, now: Date): number {
  *
  * An overdue next action, or none at all, is the signal that nobody is on it.
  *
- * A deal nobody has ever contacted (`lastTouchAt` null — an identified partner
- * not yet approached) is not neglected either; there is no elapsed silence to
- * measure, and it is the pipeline stage's job to surface it.
+ * A deal nobody has ever contacted is measured from `createdAt` instead. A
+ * lead that has sat in Identified for a month without a call is the most
+ * neglected thing on the board, not an exemption — but one created yesterday
+ * is simply new.
  */
 export function isNeglected(
   lastTouchAt: Date | null,
   neglectDays: number,
   now: Date,
   nextActionState: NextActionState | null = null,
+  createdAt: Date | null = null,
 ): boolean {
-  if (!lastTouchAt) return false;
   if (nextActionState === "ok") return false;
-  return daysSince(lastTouchAt, now) >= neglectDays;
+  const since = lastTouchAt ?? createdAt;
+  if (!since) return false;
+  return daysSince(since, now) >= neglectDays;
 }
 
 /* -------------------------------------------------------------------------

@@ -35,6 +35,7 @@ export function BoardColumn({
       ref={setNodeRef}
       data-testid={`column-${stage.id}`}
       data-over={isOver || undefined}
+      data-collapsed={collapsed ? "true" : "false"}
       aria-label={stage.label}
       style={{
         width: 306,
@@ -74,7 +75,7 @@ export function BoardColumn({
                   ? "Expand cards in this stage"
                   : "Collapse cards in this stage"
               }
-              data-testid={`collapse-${stage.id}`}
+              data-testid={`column-collapse-${stage.id}`}
               className="hover:!bg-[#1e231d] hover:!text-[#c6cdc6]"
               style={{
                 width: 20,
@@ -138,6 +139,7 @@ export function BoardColumn({
         </div>
         {total && (
           <div
+            data-testid={`stage-total-${stage.id}`}
             style={{
               marginTop: 9,
               fontFamily: "var(--font-mono)",

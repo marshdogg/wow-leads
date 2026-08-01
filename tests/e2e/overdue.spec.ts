@@ -6,7 +6,10 @@ import { expect, test } from "@playwright/test";
  * Whitfield, "Was due 5 days ago") is the canonical overdue lead.
  */
 
-const RED_TEXT = "rgb(240, 162, 148)"; // #f0a294
+const RED_TEXT = "rgb(240, 162, 148)"; // #f0a294 — next-action label
+// #e07a68 — the prototype uses the dot tone, not the text tone, for a warning
+// last-touch string (`staleColor: staleWarn ? '#e07a68' : …`).
+const RED_STALE = "rgb(224, 122, 104)";
 const RED_RAIL = "rgb(140, 58, 48)"; // #8c3a30
 const RED_BG = "rgb(30, 16, 14)"; // #1e100e
 const RED_BORDER = "rgb(92, 38, 32)"; // #5c2620
@@ -21,7 +24,7 @@ test("an overdue card renders in the red tone", async ({ page }) => {
   await expect(next).toContainText("Was due 5 days ago");
   await expect(next).toHaveCSS("background-color", RED_BG);
   await expect(next).toHaveCSS("border-color", RED_BORDER);
-  await expect(card.getByTestId("stale")).toHaveCSS("color", RED_TEXT);
+  await expect(card.getByTestId("stale")).toHaveCSS("color", RED_STALE);
 });
 
 test("an overdue row renders in the red tone with the correct rail", async ({
@@ -36,7 +39,7 @@ test("an overdue row renders in the red tone with the correct rail", async ({
     RED_RAIL,
   );
   await expect(row.getByTestId("row-next")).toHaveCSS("color", RED_TEXT);
-  await expect(row.getByTestId("row-stale")).toHaveCSS("color", RED_TEXT);
+  await expect(row.getByTestId("row-stale")).toHaveCSS("color", RED_STALE);
 
   await expect(page.getByTestId("list-footer")).toContainText("overdue");
 });

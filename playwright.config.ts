@@ -5,6 +5,9 @@ const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${PORT}`;
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  // The suite writes to the same database the app reads, so it runs serially
+  // from a freshly seeded state rather than in parallel against shared rows.
+  globalSetup: "./tests/e2e/global-setup.ts",
   fullyParallel: false,
   workers: 1,
   retries: 0,

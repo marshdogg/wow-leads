@@ -36,7 +36,12 @@ pnpm dev                       # http://localhost:3000
 
 `ANTHROPIC_API_KEY` is **optional**. Leave it blank and the app is fully usable: the touchpoint drafter and
 the voice-note parser each ship a deterministic template/regex implementation and fall back to it whenever
-the key is unset. Setting the key swaps those for live Claude calls; nothing else changes.
+the key is unset. That template path is the real path, not a degraded stub — it renders the reference copy
+from record facts. Setting the key upgrades drafting to Claude; the implementation is chosen per call by key
+presence, so it takes a restart rather than a redeploy, and any API error or output that fails validation
+falls back to the template. A bad key degrades, it does not break.
+
+`CRON_SECRET` is required even locally — see the deployment section.
 
 `GET /api/health` returns a row count per table — the fastest way to confirm the migration and seed landed.
 
@@ -144,6 +149,15 @@ short hop — and registers the daily cron:
 
 Vercel calls that route each morning with `Authorization: Bearer $CRON_SECRET`. The route refuses to run
 without a matching secret, including when `CRON_SECRET` is simply unset — a misconfigured deploy fails
-closed rather than leaving a write endpoint open. The sweep is idempotent: it skips any deal that already
-has a pending draft or one created that day, so a retry costs nothing. Add `?dryRun=1` to see what it would
-create without creating it.
+closed rather than leaving a write endpoint open. That applies in development too, so to run the sweep
+locally you have to set the secret and send it:
+
+```bash
+CRON_SECRET=dev-secret pnpm dev
+curl -H "Authorization: Bearer dev-secret" localhost:3000/api/cron/triggers
+```
+
+The sweep is idempotent: it skips any deal that already has a pending draft or one created that day, so a
+retry costs nothing. Add `?dryRun=1` to evaluate and report without writing anything — it explains per
+candidate why each deal did or did not fire, which makes it a good smoke test after a deploy. The response
+includes `"drafter": "template" | "claude"` so you can see which path ran.

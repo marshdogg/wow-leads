@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  CONTACT_CHANNELS,
   daysSilent,
+  isContactChannel,
   isNeglected,
   neglectRuleCopy,
 } from "@/components/manager/neglect";
@@ -27,9 +29,11 @@ describe("isNeglected", () => {
       expect(isNeglected(ago(13), RESI, NOW)).toBe(false);
     });
 
-    it("is not yet neglected at exactly 14 days", () => {
-      // Same boundary the repository's SQL uses: strictly older than the window.
-      expect(isNeglected(ago(14), RESI, NOW)).toBe(false);
+    it("is neglected on the threshold day itself", () => {
+      // The alert copy says "no logged activity in 14+ days", and 14+ includes
+      // 14. An earlier version excluded the boundary day and quietly
+      // contradicted its own header.
+      expect(isNeglected(ago(14), RESI, NOW)).toBe(true);
     });
 
     it("is neglected at 15 days", () => {
@@ -42,8 +46,8 @@ describe("isNeglected", () => {
       expect(isNeglected(ago(44), COMM, NOW)).toBe(false);
     });
 
-    it("is not yet neglected at exactly 45 days", () => {
-      expect(isNeglected(ago(45), COMM, NOW)).toBe(false);
+    it("is neglected on the threshold day itself", () => {
+      expect(isNeglected(ago(45), COMM, NOW)).toBe(true);
     });
 
     it("is neglected at 46 days", () => {
@@ -57,20 +61,80 @@ describe("isNeglected", () => {
     });
   });
 
-  describe("no last touch", () => {
-    it("counts a never-touched deal as neglected", () => {
-      expect(isNeglected(null, RESI, NOW)).toBe(true);
-      expect(isNeglected(undefined, COMM, NOW)).toBe(true);
+  describe("never contacted", () => {
+    it("is not neglected on last-touch alone — there is nothing to measure", () => {
+      expect(isNeglected(null, RESI, NOW)).toBe(false);
     });
 
-    it("counts an unparseable timestamp as neglected rather than silently fine", () => {
-      expect(isNeglected("not a date", RESI, NOW)).toBe(true);
+    it("falls back to createdAt, so a lead that has sat for a month counts", () => {
+      expect(isNeglected(null, RESI, NOW, null, ago(30))).toBe(true);
+    });
+
+    it("does not punish a deal created yesterday", () => {
+      expect(isNeglected(null, RESI, NOW, null, ago(1))).toBe(false);
+    });
+
+    it("prefers a real last touch over createdAt", () => {
+      // Created long ago but spoken to yesterday — not neglected.
+      expect(isNeglected(ago(1), RESI, NOW, null, ago(300))).toBe(false);
     });
   });
 
-  it("accepts an ISO string as well as a Date", () => {
-    expect(isNeglected(ago(15).toISOString(), RESI, NOW)).toBe(true);
-    expect(isNeglected(ago(13).toISOString(), RESI, NOW)).toBe(false);
+  describe("booked next action", () => {
+    // Long silence plus an on-time next action is a deal being worked. A
+    // revival lead sits quiet for months by design and still has a call on
+    // Thursday's calendar.
+    it("is not neglected however long the silence, when a next action is on time", () => {
+      expect(isNeglected(ago(182), RESI, NOW, "ok")).toBe(false);
+      expect(isNeglected(ago(400), COMM, NOW, "ok")).toBe(false);
+    });
+
+    it("outranks even a stale createdAt on a never-contacted deal", () => {
+      expect(isNeglected(null, RESI, NOW, "ok", ago(300))).toBe(false);
+    });
+
+    it("is neglected when the next action is itself overdue", () => {
+      expect(isNeglected(ago(15), RESI, NOW, "overdue")).toBe(true);
+      expect(isNeglected(ago(152), RESI, NOW, "overdue")).toBe(true);
+    });
+
+    it("is neglected when no next action is set", () => {
+      expect(isNeglected(ago(15), RESI, NOW, null)).toBe(true);
+    });
+
+    it("does not rescue a deal that is inside its window anyway", () => {
+      // Still false, but for the silence reason, not the next-action one.
+      expect(isNeglected(ago(13), RESI, NOW, "overdue")).toBe(false);
+    });
+
+    it("omitting the argument tests silence alone", () => {
+      expect(isNeglected(ago(182), RESI, NOW)).toBe(true);
+    });
+  });
+});
+
+describe("isContactChannel", () => {
+  it("counts conversations", () => {
+    for (const c of ["SMS", "EMAIL", "CALL", "VISIT", "NOTE"] as const) {
+      expect(isContactChannel(c), c).toBe(true);
+    }
+  });
+
+  it("does not count things that happened to the account, not with it", () => {
+    // A trigger firing or a job completing is not someone reaching out.
+    for (const c of ["TRIGGER", "JOB", "SOURCE"] as const) {
+      expect(isContactChannel(c), c).toBe(false);
+    }
+  });
+
+  it("exports the set it checks against", () => {
+    expect([...CONTACT_CHANNELS].sort()).toEqual([
+      "CALL",
+      "EMAIL",
+      "NOTE",
+      "SMS",
+      "VISIT",
+    ]);
   });
 });
 
@@ -95,5 +159,17 @@ describe("neglectRuleCopy", () => {
     expect(copy).toContain(`${RESI}+ days`);
     expect(copy).toContain(`${COMM}+`);
     expect(copy).toContain(PIPES.comm.label);
+  });
+
+  it("states both halves of the rule, not just the silence half", () => {
+    // The header claimed only the threshold while the query also required no
+    // booked next action — half a rule reads as a wrong one.
+    expect(neglectRuleCopy()).toContain("no next action booked");
+  });
+
+  it("reads as one sentence", () => {
+    expect(neglectRuleCopy()).toBe(
+      "No logged activity in 14+ days (45+ on Commercial Bid) and no next action booked.",
+    );
   });
 });

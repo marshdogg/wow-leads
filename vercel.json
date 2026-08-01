@@ -6,5 +6,10 @@
       "path": "/api/cron/triggers",
       "schedule": "0 6 * * *"
     }
-  ]
+  ],
+  "functions": {
+    "app/api/cron/triggers/route.ts": {
+      "maxDuration": 60
+    }
+  }
 }

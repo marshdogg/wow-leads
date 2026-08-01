@@ -1,14 +1,13 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { approvals } from "@/db/schema";
-import { getUserById } from "@/lib/current-user";
 import { appendAudit } from "@/lib/repositories/audit";
 import { setAiPending, setNextAction } from "@/lib/repositories/deals";
 import { toApproval } from "@/lib/repositories/mappers";
 import { formatDue } from "@/lib/repositories/rules";
 import { logTouchpoint } from "@/lib/repositories/touchpoints";
 import { addDays } from "@/lib/triggers/dates";
-import { AGENT_NAMES, type AgentId } from "@/lib/triggers/types";
+import type { AgentId } from "@/lib/triggers/types";
 import type {
   Approval,
   ApprovalStatus,
@@ -217,7 +216,6 @@ async function send(
 ): Promise<DecideResult> {
   const edited = input.decision === "edit";
   const body = edited ? input.body!.trim() : approval.body;
-  const actor = getUserById(input.actorUserId);
 
   const updated = await writeStatus({
     approvalId: approval.id,
@@ -227,17 +225,22 @@ async function send(
     decidedAt: now,
   });
 
-  // The provenance line the Record timeline renders. It names the agent that
-  // drafted *and* the human that approved, because both are true and a reader
-  // needs to know which is which.
+  // Passing both actors is what produces the compound provenance line the
+  // Record timeline renders — "Re-marketing agent · approved by Marshall
+  // Behrns" — naming the agent that drafted *and* the human that approved,
+  // because both are true and a reader needs to know which is which.
+  //
+  // The string itself is deliberately not built here. `resolveProvenance()`
+  // in lib/repositories/rules.ts is the one definition of how provenance
+  // renders, and restating it would let this row drift from every other row
+  // in the same timeline. `who` remains overridable if that ever has to
+  // change for approvals alone.
   await logTouchpoint({
     dealId: approval.dealId,
     channel: touchpointChannel(approval.channel),
     body,
     agentId,
     actorUserId: input.actorUserId,
-    who: `${AGENT_NAMES[agentId]} · approved by ${actor.name}`,
-    byAgent: true,
   });
 
   // The AI DRAFTED chip clears on the board the moment this lands.

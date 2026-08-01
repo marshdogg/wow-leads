@@ -9,6 +9,7 @@
  * claims something the timeline does not support.
  */
 
+import { isContactChannel } from "@/components/manager/neglect";
 import { PIPES } from "@/lib/pipelines";
 import type { SuggestionId } from "@/lib/record-fields";
 import type { RecordView } from "./view-model";
@@ -66,7 +67,10 @@ function daysToNeglect(
   neglectDays: number,
   now: Date,
 ): number {
-  const last = view.timeline[0]?.occurredAt;
+  // Only conversations reset the clock — a trigger firing or a job completing
+  // is not a touch. Same definition the neglect query uses.
+  const last = view.timeline.find((t) => isContactChannel(t.channel))
+    ?.occurredAt;
   if (!last) return 0;
   const elapsed = Math.floor(
     (now.getTime() - new Date(last).getTime()) / 86_400_000,

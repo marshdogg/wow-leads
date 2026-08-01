@@ -43,7 +43,12 @@ export function LeftRail({
   };
 
   return (
+    // Hidden below md: 252px of chrome on a 390px phone leaves nothing for the
+    // content. The Field view — the only screen reps use on a phone — carries
+    // its own mobile header. `display` lives in the class, not the style
+    // object, so the responsive variant isn't overridden by the inline value.
     <div
+      className="hidden md:flex"
       style={{
         position: "sticky",
         top: 0,
@@ -52,7 +57,6 @@ export function LeftRail({
         minHeight: 840,
         width: 252,
         flex: "none",
-        display: "flex",
         flexDirection: "column",
         background: "#0a0c0a",
         borderRight: "1px solid #1f231e",

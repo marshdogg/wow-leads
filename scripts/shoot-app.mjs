@@ -69,10 +69,28 @@ async function main() {
   await phone.waitForTimeout(900);
   await phone.screenshot({ path: join(OUT, "field-390.png"), fullPage: true });
   // A page that scrolls sideways at 390px is broken, so assert it here.
-  const overflow = await phone.evaluate(
-    () => document.documentElement.scrollWidth - window.innerWidth,
-  );
-  if (overflow > 1) problems.push(`[390px] horizontal overflow ${overflow}px`);
+  // documentElement.scrollWidth alone is not enough — it clamps to the
+  // viewport while body and individual elements still overflow.
+  const overflow = await phone.evaluate(() => {
+    const worst = Array.from(document.querySelectorAll("*")).reduce(
+      (max, el) => {
+        const r = el.getBoundingClientRect();
+        return r.width > 20 ? Math.max(max, r.right) : max;
+      },
+      0,
+    );
+    return {
+      body: document.body.scrollWidth - window.innerWidth,
+      doc: document.documentElement.scrollWidth - window.innerWidth,
+      widest: Math.round(worst) - window.innerWidth,
+    };
+  });
+  const worst = Math.max(overflow.body, overflow.doc, overflow.widest);
+  if (worst > 1) {
+    problems.push(
+      `[390px] horizontal overflow ${worst}px (body ${overflow.body}, doc ${overflow.doc}, widest element ${overflow.widest})`,
+    );
+  }
   console.log("captured field-390");
   await phone.close();
 

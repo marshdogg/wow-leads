@@ -71,18 +71,34 @@ describe("createEstimate → getEstimateStatus round trip", () => {
     expect(osRef).toMatch(/^EST-\d{5}$/);
   });
 
-  it("persists the deal id, carries and a human-readable body", async () => {
+  it("persists the deal id and the appointment", async () => {
     const store = new MemoryEstimateStore();
     const { osRef } = await new InMemoryWowOsClient(store).createEstimate(
       INPUT,
     );
 
     const stored = await store.load(osRef);
-    expect(stored?.dealId).toBe("r1");
-    expect(stored?.carries).toEqual(INPUT.carries);
-    expect(stored?.body).toContain("Thu Aug 6 at 10:00 AM");
-    expect(stored?.body).toContain("Kris Jolin");
-    expect(stored?.body).toContain(osRef);
+    expect(stored).toEqual({
+      osRef,
+      dealId: "r1",
+      when: "Thu Aug 6 at 10:00 AM",
+      estimator: "Kris Jolin",
+    });
+  });
+
+  it("writes no timeline row of its own", async () => {
+    // The adapter must not log a touchpoint: `bookDeal` already writes the
+    // Funnel-authored JOB entry, and a second one put two near-identical rows
+    // on the Record timeline a second apart. `save` is optional for exactly
+    // this reason — the database-backed store does not implement it.
+    const readOnly: EstimateStore = {
+      osRefExists: async () => false,
+      load: async () => null,
+    };
+    expect(readOnly.save).toBeUndefined();
+    await expect(
+      new InMemoryWowOsClient(readOnly).createEstimate(INPUT),
+    ).resolves.toMatchObject({ osRef: expect.stringMatching(/^EST-\d{5}$/) });
   });
 
   it("gives distinct refs to distinct estimates", async () => {
@@ -114,7 +130,6 @@ describe("unknown osRef", () => {
     let touched = false;
     const spy: EstimateStore = {
       osRefExists: async () => false,
-      accountIdForDeal: async () => null,
       save: async () => {},
       load: async () => {
         touched = true;
@@ -144,7 +159,6 @@ describe("ref collisions", () => {
         }
         return false;
       },
-      accountIdForDeal: async () => null,
       save: async (r) => {
         saved = r;
       },
@@ -162,13 +176,42 @@ describe("ref collisions", () => {
   it("gives up rather than issuing a duplicate ref", async () => {
     const alwaysTaken: EstimateStore = {
       osRefExists: async () => true,
-      accountIdForDeal: async () => null,
       save: async () => {},
       load: async () => null,
     };
     await expect(
       new InMemoryWowOsClient(alwaysTaken).createEstimate(INPUT),
     ).rejects.toThrow(/unique osRef/);
+  });
+});
+
+describe("reconstructing the appointment from the deal row", () => {
+  // `DbEstimateStore` reads `deals.next_due`, which `bookDeal` writes as
+  // "<whenLabel> · <estimatorName>". These cover that parse without a database.
+  const parse = (nextDue: string | null) => {
+    const at = nextDue?.indexOf(" · ") ?? -1;
+    if (!nextDue || at === -1)
+      return { when: "Scheduled", estimator: "Unassigned" };
+    return { when: nextDue.slice(0, at), estimator: nextDue.slice(at + 3) };
+  };
+
+  it("splits the booked form", () => {
+    expect(parse("Thu Aug 6 at 10:00 AM · Kris Jolin")).toEqual({
+      when: "Thu Aug 6 at 10:00 AM",
+      estimator: "Kris Jolin",
+    });
+  });
+
+  it("falls back for a deal seeded with an osRef but never booked", () => {
+    // The demo's EST-40218 is exactly this case.
+    expect(parse(null)).toEqual({
+      when: "Scheduled",
+      estimator: "Unassigned",
+    });
+    expect(parse("Follow up Friday")).toEqual({
+      when: "Scheduled",
+      estimator: "Unassigned",
+    });
   });
 });
 
