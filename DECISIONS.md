@@ -39,3 +39,57 @@ spec (`design-refs/README.md`) explicitly left open.
 - **"WHY THIS FIRED" reasons render as green ✓ marks, not numbered bullets.**
   The build brief said numbered; the prototype — which the handoff spec declares
   final-intent on fidelity — uses ✓. Fidelity won.
+- **The Field view shows the record's real next action, not the prototype's.**
+  The prototype had a standalone `field` fixture ("Walk the interior, quote the
+  touch-ups" / "Today · warranty visit") that was never reconciled with deal
+  `r1`, whose next action is "Warranty check-in — approve the draft". The screen
+  reads the deal, so it shows the deal's own next action. Its own annotation
+  argues for this — "Same record, not a mobile app. Nothing needs syncing back."
+  Reseeding `r1` to match would change the board card and the Approvals queue
+  too. The address likewise shows the seeded `2712 Cathedral Ave NW` without the
+  prototype's "· Woodley Park" suffix, which exists nowhere in the data.
+- **The prototype's annotation overlays are not reproduced.** The stat-card
+  checkboxes and ⓘ icons, the record's "INFERRED — CONFIRM AGAINST REAL WOW OS
+  SCREENS" panel and the dashboard's "FUTURE STATE · PRD §3" panel are
+  design-review scaffolding gated behind the prototype's `annotations` prop.
+  They are not product UI and are omitted. The substance of the INFERRED note is
+  open question #4 above.
+
+## Other decisions worth knowing
+
+- **`last_touch_at` means the most recent touchpoint**, not the age of whatever
+  the `stale` display string happens to mention. The two are stored separately:
+  "4 mo since job" describes a job, "19d silent" describes a touch, and only the
+  latter should drive neglect. Seeding the first version from the display string
+  reported six neglected deals, including ones with a call booked for tomorrow.
+  The seed now asserts the invariant and prints "last_touch_at agrees with the
+  newest touchpoint on every deal" on every run.
+- **Touchpoint provenance comes from the actor, not the deal owner.** A human
+  quick-logging a call on an agent-owned deal is recorded as the human. Only an
+  approved AI draft reads as an agent action, in the composite form
+  "Re-marketing agent · approved by Marshall Behrns".
+- **The app is fully usable with no `ANTHROPIC_API_KEY`.** The deterministic
+  template drafter and the regex voice parser are the default implementations,
+  not error fallbacks; setting the key swaps in `claude-sonnet-5` behind the
+  same interfaces. Nothing was deployed with a key, so what is live is the
+  deterministic path.
+- **The shell hides the 252px rail below the `md` breakpoint.** Keeping it on a
+  390px phone left 138px for content. The Field view — the only screen reps use
+  on a phone — carries its own mobile header.
+- **The e2e suite re-seeds before running.** The tests approve drafts, drag
+  cards and save notes against the same database the app reads, so without a
+  reset they are order-dependent: the signature-flow test clears `r1`'s
+  AI-drafted state and the list-view test then fails for an unrelated reason.
+- **No auth, deliberately.** `lib/current-user.ts` hard-codes Marshall Behrns
+  (manager) behind a `TODO(auth)` marker and is the single seam real auth drops
+  into. The left-rail rep switcher is a demo affordance on top of it.
+
+## Known gaps at handover
+
+- **`CRON_SECRET` is set for Production and Development but not Preview.** The
+  Vercel CLI's `env add … preview` returns `git_branch_required` and then
+  rejects the exact command it tells you to run. The daily trigger cron only
+  runs against Production, so this does not affect the deployment; set it from
+  the Vercel dashboard if preview deployments ever need the endpoint.
+- The Record field set still needs sign-off against the real WOW OS deal-detail
+  screen (open question #4).
