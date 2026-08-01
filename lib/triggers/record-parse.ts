@@ -156,6 +156,13 @@ export function splitAreas(source: string | undefined): string[] {
  * So the test is what the row says happened, not which channel it arrived on.
  */
 export function isCompletionRecord(job: TouchpointRow): boolean {
+  // Prefer the structural marker: it says what the event *is*, rather than
+  // inferring it from how somebody phrased the body. The prose fallback stays
+  // for rows written before the marker existed and for anything logged by a
+  // path that does not set it — a completion should not stop counting as one
+  // because its row is older than the field.
+  const event = job.structured?.find((f) => f.label.toUpperCase() === "EVENT");
+  if (event) return event.value === "job_completed";
   return /\b(completed|finished)\b/i.test(job.body);
 }
 

@@ -650,16 +650,28 @@ describe("record parsing", () => {
     const completion = {
       channel: "JOB",
       body: "Interior repaint completed — 4 rooms, hallway, stairwell · $8,400",
+      structured: [{ label: "EVENT", value: "job_completed" }],
       occurredAt: new Date(2025, 7, 22),
     } as Parameters<typeof completionEvent>[0][number];
     const booking = {
       channel: "JOB",
       body: "Estimate scheduled — Thu Aug 6 at 10:00 AM with Kris Jolin · EST-40218",
+      structured: [{ label: "EVENT", value: "estimate_booked" }],
       occurredAt: new Date(2026, 7, 1),
     } as Parameters<typeof completionEvent>[0][number];
 
     expect(isCompletionRecord(completion)).toBe(true);
     expect(isCompletionRecord(booking)).toBe(false);
+
+    // The marker wins over the prose when both are present…
+    expect(
+      isCompletionRecord({ ...booking, body: "Job completed on site" }),
+    ).toBe(false);
+    // …and the prose still decides for rows written before the marker existed.
+    expect(
+      isCompletionRecord({ ...completion, structured: null }),
+    ).toBe(true);
+    expect(isCompletionRecord({ ...booking, structured: null })).toBe(false);
     // Newest first would pick the booking; it must pick the completion.
     expect(completionEvent([completion, booking])).toBe(completion);
     expect(completionEvent([booking])).toBeUndefined();
