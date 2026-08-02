@@ -36,7 +36,7 @@ const GRID = "2.1fr 1.05fr 1fr 1.5fr 1.1fr 0.85fr 40px";
  * than listing the types, so a sixth semantic type added later is handled
  * without anyone remembering to come back here.
  */
-function stageCellColor(stage: StageConfig | undefined): string {
+export function stageCellColor(stage: StageConfig | undefined): string {
   const SECONDARY = "#c6cdc6";
   if (!stage) return SECONDARY;
   const semantic = columnTitleColor(stage);

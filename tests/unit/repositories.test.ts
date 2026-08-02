@@ -10,8 +10,11 @@ import {
   DEFAULT_NEGLECT_DAYS,
   PIPELINE_IDS,
   PIPES,
+  isRevisitDue,
   resolveNeglectDays,
+  revisitState,
   stageCountsForNeglect,
+  stageRequiresRevisitDate,
   winRate,
 } from "@/lib/pipelines";
 import {
@@ -934,6 +937,46 @@ describe("semantic stages drive neglect", () => {
       "paused",
     );
     expect(c6.revisitDate).toBe("2027-01-08");
+  });
+
+  it("classifies revisit state from one place, asked two ways", () => {
+    // `getRevisitDue` lists paused deals needing attention; `isRevisitDue`
+    // answers whether one is due. They differ on `no-date` by design — but
+    // both read `revisitState`, so they can never disagree about what paused,
+    // scheduled and due *mean*. Two inline copies of that rule would.
+    const paused = { semanticType: "paused" as const };
+    const now = new Date(2026, 7, 1);
+    const past = new Date(2026, 6, 1);
+    const future = new Date(2026, 9, 1);
+
+    expect(revisitState(paused, { revisitDate: past }, now)).toBe("due");
+    expect(revisitState(paused, { revisitDate: future }, now)).toBe("scheduled");
+    expect(revisitState(paused, { revisitDate: null }, now)).toBe("no-date");
+    expect(
+      revisitState({ semanticType: "open" }, { revisitDate: past }, now),
+    ).toBe("not-paused");
+
+    // Due on the day it falls, not the day after.
+    expect(revisitState(paused, { revisitDate: now }, now)).toBe("due");
+
+    expect(isRevisitDue(paused, { revisitDate: past }, now)).toBe(true);
+    expect(isRevisitDue(paused, { revisitDate: null }, now)).toBe(false);
+  });
+
+  it("requires a revisit date wherever it excludes a stage from neglect", () => {
+    // The two facts have to travel together. Excluding paused from neglect
+    // without demanding a date trades a false positive for a false negative,
+    // and a missing alert gets trusted where a noisy one gets ignored.
+    for (const id of PIPELINE_IDS) {
+      for (const stage of PIPES[id].stages) {
+        if (stage.semanticType !== "paused") continue;
+        expect({
+          stage: stage.id,
+          excluded: !stageCountsForNeglect(stage),
+          needsDate: stageRequiresRevisitDate(stage),
+        }).toEqual({ stage: stage.id, excluded: true, needsDate: true });
+      }
+    }
   });
 
   it("computes win rate from semantics, never from labels", () => {

@@ -29,6 +29,7 @@ import {
 } from "./rules";
 import {
   resolveNeglectDays,
+  revisitState,
   stageCountsForNeglect,
 } from "@/lib/pipelines";
 import type {
@@ -978,10 +979,24 @@ export async function getRevisitDue(now = new Date()): Promise<RevisitDueDeal[]>
 
   const due: RevisitDueDeal[] = [];
   for (const r of rows) {
-    if (r.semanticType !== "paused") continue;
+    /*
+     * The three-way decision comes from `revisitState`, not from re-deriving
+     * it here. This list and `isRevisitDue` ask different questions of the
+     * same classifier — "which paused deals need attention" versus "is this
+     * one due" — and they answer differently on `no-date` by design. What they
+     * must not do is disagree about what paused, scheduled and due *mean*,
+     * which is what two inline copies of the rule would eventually produce.
+     */
+    const state = revisitState(
+      { semanticType: r.semanticType as SemanticType },
+      { revisitDate: r.revisitDate },
+      now,
+    );
+    // Scheduled is the pause working. Undated is the gap the rule now
+    // prevents, kept visible for rows written before it existed.
+    if (state === "not-paused" || state === "scheduled") continue;
+
     const daysOverdue = r.revisitDate ? daysSince(r.revisitDate, now) : null;
-    // Not due yet is fine — that is the pause working.
-    if (daysOverdue !== null && daysOverdue < 0) continue;
     due.push({
       id: r.id,
       name: r.name,

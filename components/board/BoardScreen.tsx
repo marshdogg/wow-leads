@@ -164,7 +164,6 @@ export function BoardScreen({
    * rather than inside the drag handler.
    */
   function move(dealId: string, stageId: StageId) {
-    console.log("[probe] move()", dealId, stageId);
     const deal = deals.find((d) => d.id === dealId);
     if (!deal) return;
 
