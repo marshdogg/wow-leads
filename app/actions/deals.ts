@@ -16,8 +16,10 @@ import {
   moveDeal,
   setNextAction,
 } from "@/lib/repositories/deals";
+import { getPipelines } from "@/lib/repositories/pipelines";
 import { logTouchpoint } from "@/lib/repositories/touchpoints";
-import type { Deal } from "@/lib/types";
+import { stageRequiresReason } from "@/lib/pipelines";
+import { LOST_REASONS, type Deal, type LostReason } from "@/lib/types";
 
 export type ActionResult<T> =
   | ({ ok: true } & T)
@@ -37,7 +39,36 @@ function revalidateBoard(dealId?: string) {
 const moveSchema = z.object({
   dealId: z.string().min(1),
   stageId: z.string().min(1),
+  /** Required when the target stage demands one. See `requireReason`. */
+  lostReason: z.enum(LOST_REASONS as [LostReason, ...LostReason[]]).optional(),
 });
+
+/**
+ * Refuses a move into a reason-requiring stage that has no reason.
+ *
+ * Checked here rather than trusting the modal, because a rule enforced only in
+ * the component that happens to call it is not a rule — and this one is
+ * load-bearing twice over: `lostReason` drives the win-rate split and it is
+ * what the Lost-Lead Revival trigger fires on. A deal closed without it looks
+ * perfectly fine on the board and quietly never comes back.
+ *
+ * Reads the stage rows rather than the compile-time union so a franchise's own
+ * stage, or one flagged `requiresReason` on a non-lost stage, behaves the same.
+ */
+async function requireReason(
+  stageId: string,
+  lostReason: LostReason | undefined,
+): Promise<string | null> {
+  if (lostReason) return null;
+
+  const pipelines = await getPipelines();
+  const stage = pipelines
+    .flatMap((p) => p.stages)
+    .find((s) => s.id === stageId);
+  if (!stage || !stageRequiresReason(stage)) return null;
+
+  return `Moving to ${stage.label} needs a reason — it is what the revival trigger reads later.`;
+}
 
 export async function moveDealAction(
   input: z.input<typeof moveSchema>,
@@ -45,9 +76,23 @@ export async function moveDealAction(
   const parsed = moveSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: "Invalid move request." };
 
+  const missing = await requireReason(
+    parsed.data.stageId,
+    parsed.data.lostReason,
+  );
+  if (missing) return { ok: false, error: missing };
+
   try {
+    // Named explicitly rather than spread from `parsed.data`. A spread would
+    // let `lostReason` through the type checker and straight into the bin —
+    // TypeScript does not excess-property-check spreads — and a silently
+    // dropped lost reason is invisible until a revival that should have fired
+    // next spring doesn't. If this line stops compiling, `moveDeal` has lost
+    // the parameter, which is exactly when someone should find out.
     const deal = await moveDeal({
-      ...parsed.data,
+      dealId: parsed.data.dealId,
+      stageId: parsed.data.stageId,
+      lostReason: parsed.data.lostReason ?? null,
       actorUserId: getCurrentUser().id,
     });
     revalidateBoard(deal.id);

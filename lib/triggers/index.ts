@@ -18,7 +18,7 @@ import {
 
 export * from "./types";
 export { elevenMonthTrigger, evaluateElevenMonth } from "./eleven-month";
-export { revivalTrigger, evaluateRevival, isPriceObjection } from "./revival";
+export { revivalTrigger, evaluateRevival } from "./revival";
 export { seasonalTrigger, evaluateSeasonal } from "./seasonal";
 export { sequenceTrigger, evaluateSequence, stepDueAt } from "./sequence";
 export {

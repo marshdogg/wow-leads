@@ -93,9 +93,43 @@ export const stages = pgTable(
     hint: text("hint").notNull().default(""),
     /** Integer order so stages are reconfigurable without a deploy. */
     sortOrder: integer("sort_order").notNull(),
-    /** Active/positive stages get a green column border. */
+    /**
+     * What this stage *means*: open | positive | paused | won | lost.
+     *
+     * Everything derives from this rather than from an id or a label —
+     * styling, win rate, roll-ups and neglect — so a franchise inventing
+     * "Awaiting Permit" tags it `paused` and every dashboard keeps working
+     * without knowing the name.
+     */
+    semanticType: text("semantic_type").notNull().default("open"),
+    /** Colour override. Null means the semantic type decides. */
+    accent: text("accent"),
+    /** Show the `$X in stage` roll-up on this column. */
+    showValueRoll: boolean("show_value_roll").notNull().default(false),
+    /** Force a structured reason on entry. True by default for `lost`. */
+    requiresReason: boolean("requires_reason").notNull().default(false),
+    /**
+     * Force a revisit date on entry. True by default for `paused`, because
+     * addendum §3.2 defines paused as "live but on hold (needs revisit date)"
+     * and nothing enforced the parenthetical. Excluding paused from neglect
+     * without it trades a false positive for a false negative — and a missing
+     * alert gets trusted where a noisy one merely gets ignored.
+     */
+    requiresRevisitDate: boolean("requires_revisit_date")
+      .notNull()
+      .default(false),
+    /** Overrides the pipeline threshold. Most specific wins. */
+    neglectDays: integer("neglect_days"),
+    /** The landing column for new deals in this pipeline. */
+    isDefault: boolean("is_default").notNull().default(false),
+    /** Corporate spine: renameable and reorderable, never removable. */
+    locked: boolean("locked").notNull().default(false),
+    /** Archived stages stay renderable in historical timelines. */
+    active: boolean("active").notNull().default(true),
+
+    /** @deprecated Superseded by `semanticType`. Kept until consumers migrate. */
     positive: boolean("positive").notNull().default(false),
-    /** Overrides the column title colour (On-Hold amber, Dormant dusty). */
+    /** @deprecated Superseded by `accent`. */
     titleColor: text("title_color"),
   },
   (t) => [
@@ -274,8 +308,21 @@ export const deals = pgTable(
     /** Biz Dev: "Cold call · Jul 28". */
     initialType: text("initial_type"),
 
-    /** Residential Result sub-outcome: booked | parked. */
+    /** Residential Won sub-outcome: booked | parked. A disposition, not an outcome. */
     resultOutcome: text("result_outcome"),
+    /**
+     * Why a deal was lost, and when. Required on entering a `lost` stage —
+     * without a structured reason the revival trigger has nothing to select
+     * on, and "lost" degrades into a column things disappear into.
+     */
+    lostReason: text("lost_reason"),
+    lostAt: timestamp("lost_at", { withTimezone: true }),
+    /**
+     * When a paused deal becomes actionable again. Replaces the neglect rule
+     * for `paused` stages — parked on purpose is not neglected, but it does
+     * come due.
+     */
+    revisitDate: timestamp("revisit_date", { withTimezone: true }),
     retryAt: text("retry_at"),
 
     promoId: text("promo_id").references(() => promos.id),
@@ -302,6 +349,26 @@ export const deals = pgTable(
     index("deals_account_idx").on(t.accountId),
     index("deals_last_touch_idx").on(t.lastTouchAt),
     index("deals_sourced_from_idx").on(t.sourcedFromDealId),
+    /*
+     * A loss the code cannot classify must never be treated as a price
+     * objection — the consequence of guessing is a discount offer to a real
+     * customer. The boundary already rejects an unknown value; this makes it
+     * unreachable rather than defended against, the same way the approvals
+     * one-source check guards what that column means.
+     */
+    check(
+      "deals_lost_reason_chk",
+      sql`lost_reason is null or lost_reason in ('not interested','unqualified','price','timing','competitor','no response','other')`,
+    ),
+    /*
+     * Set together or absent together. A reason with no date, or a date with
+     * no reason, is a half-recorded loss: the revival trigger needs both to
+     * decide whether the cooling period has passed.
+     */
+    check(
+      "deals_lost_pair_chk",
+      sql`(lost_reason is null) = (lost_at is null)`,
+    ),
   ],
 );
 

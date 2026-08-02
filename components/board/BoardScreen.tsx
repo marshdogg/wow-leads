@@ -6,16 +6,18 @@ import { moveDealAction } from "@/app/actions/deals";
 import { saveBoardPrefsAction } from "@/app/actions/prefs";
 import { ListTable } from "@/components/list/ListTable";
 import { useUi } from "@/lib/store/ui";
-import { stageLabel } from "@/lib/pipelines";
+import { stageLabel, stageRequiresReason } from "@/lib/pipelines";
 import type {
   BoardPrefs,
   Deal,
   ListSort,
+  LostReason,
   PipelineConfig,
   PipelineId,
   StageId,
 } from "@/lib/types";
 import { BoardColumns } from "./BoardColumns";
+import { LostReasonModal, type LostReasonRequest } from "./LostReasonModal";
 import { BoardHeader } from "./BoardHeader";
 import { KpiStrip, type BoardStat } from "./KpiStrip";
 import { PipelineSelector } from "./PipelineSelector";
@@ -75,7 +77,12 @@ export function BoardScreen({
   const [deals, setDeals] = useState(initialDeals);
   const [collapsedCols, setCollapsedCols] = useState(prefs.collapsedCols);
   const [listSort, setListSort] = useState(prefs.listSort);
-  const [, startTransition] = useTransition();
+  const [pending, startTransition] = useTransition();
+
+  /** The move waiting on a lost reason, or null. See `move`. */
+  const [lostRequest, setLostRequest] = useState<LostReasonRequest | null>(
+    null,
+  );
 
   const stages = pipeline.stages;
   const colKey = (stageId: StageId) => `${pipeline.id}:${stageId}`;
@@ -151,7 +158,39 @@ export function BoardScreen({
     void setViewState({ track: "all" });
   }
 
+  /**
+   * Every route into a stage passes through here — drag-and-drop today, and
+   * anything added later — which is why the reason gate lives at this level
+   * rather than inside the drag handler.
+   */
   function move(dealId: string, stageId: StageId) {
+    console.log("[probe] move()", dealId, stageId);
+    const deal = deals.find((d) => d.id === dealId);
+    if (!deal) return;
+
+    const target = stages.find((s) => s.id === stageId);
+    if (target && stageRequiresReason(target)) {
+      // Deliberately *before* the optimistic update. A card that lands in Lost
+      // and then springs back if you cancel reads as a failed drag rather than
+      // an unanswered question, and the answer is what the revival trigger
+      // runs on — it deserves a decision, not a dismissal.
+      setLostRequest({
+        dealId,
+        dealName: deal.name,
+        stageId,
+        stageLabel: target.label,
+      });
+      return;
+    }
+
+    commitMove(dealId, stageId);
+  }
+
+  function commitMove(
+    dealId: string,
+    stageId: StageId,
+    lostReason?: LostReason,
+  ) {
     const before = deals;
     const deal = deals.find((d) => d.id === dealId);
     if (!deal) return;
@@ -161,14 +200,25 @@ export function BoardScreen({
     );
 
     startTransition(async () => {
-      const res = await moveDealAction({ dealId, stageId });
+      const res = await moveDealAction({
+        dealId,
+        stageId,
+        ...(lostReason ? { lostReason } : {}),
+      });
       if (res.ok) {
         setDeals((current) =>
           current.map((d) => (d.id === dealId ? res.deal : d)),
         );
-        showToast(`${deal.name} → ${stageLabel(pipeline.id, stageId)}`);
+        setLostRequest(null);
+        showToast(
+          lostReason
+            ? `${deal.name} marked lost · ${lostReason}`
+            : `${deal.name} → ${stageLabel(pipeline.id, stageId)}`,
+        );
       } else {
         setDeals(before);
+        // The prompt stays open on failure. Closing it would throw away a
+        // considered answer and leave the card silently unmoved.
         showToast(res.error);
       }
     });
@@ -240,6 +290,20 @@ export function BoardScreen({
           />
         )}
       </div>
+
+      <LostReasonModal
+        request={lostRequest}
+        pending={pending}
+        onConfirm={(reason) => {
+          if (!lostRequest) return;
+          commitMove(
+            lostRequest.dealId,
+            lostRequest.stageId as StageId,
+            reason,
+          );
+        }}
+        onCancel={() => setLostRequest(null)}
+      />
     </div>
   );
 }

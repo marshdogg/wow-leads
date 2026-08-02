@@ -74,6 +74,9 @@ export function toDeal(row: DealRow): Deal {
     initialType: row.initialType,
     resultOutcome: (row.resultOutcome as ResultOutcome | null) ?? null,
     retryAt: row.retryAt,
+    lostReason: (row.lostReason as Deal["lostReason"]) ?? null,
+    lostAt: row.lostAt,
+    revisitDate: row.revisitDate,
     accountId: row.accountId,
     sourcedFromDealId: row.sourcedFromDealId,
   };

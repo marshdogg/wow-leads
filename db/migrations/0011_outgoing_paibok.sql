@@ -1,0 +1,1 @@
+ALTER TABLE "stages" ADD COLUMN "requires_revisit_date" boolean DEFAULT false NOT NULL;

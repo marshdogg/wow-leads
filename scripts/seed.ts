@@ -37,7 +37,13 @@ import {
 } from "@/lib/fixtures/deals";
 import { anchorDays, nextDueFrom } from "@/lib/fixtures/time";
 import type { DealMetric } from "@/lib/types";
-import { ESTIMATORS, PIPELINE_IDS, PIPES } from "@/lib/pipelines";
+import {
+  ESTIMATORS,
+  PIPELINE_IDS,
+  PIPES,
+  stageRequiresReason,
+  stageRequiresRevisitDate,
+} from "@/lib/pipelines";
 import { CONTACT_CHANNELS, isContactChannel } from "@/lib/repositories/rules";
 
 config({ path: ".env.local" });
@@ -180,8 +186,23 @@ const stageRows = PIPELINE_IDS.flatMap((id) =>
     label: s.label,
     hint: s.hint,
     sortOrder: i,
-    positive: s.positive ?? false,
-    titleColor: s.titleColor ?? null,
+    semanticType: s.semanticType,
+    accent: s.accent ?? null,
+    showValueRoll: s.showValueRoll ?? false,
+    // Losing without saying why is how "lost" becomes a column things vanish
+    // into, so a lost stage demands a reason unless explicitly told not to.
+    // Both defaults live in `lib/pipelines.ts`, not here — a second copy of
+    // "lost needs a reason, paused needs a date" is a second place to get it
+    // wrong.
+    requiresReason: stageRequiresReason(s),
+    requiresRevisitDate: stageRequiresRevisitDate(s),
+    neglectDays: s.neglectDays ?? null,
+    isDefault: s.isDefault ?? false,
+    locked: s.locked ?? false,
+    active: s.active ?? true,
+    // Deprecated mirrors, still read by consumers mid-migration.
+    positive: s.semanticType === "positive",
+    titleColor: s.accent ?? null,
   })),
 );
 
@@ -461,6 +482,9 @@ function dealRow(d: DealFixture, latestTouchAt: Date | null, createdAt: Date) {
     osRef: d.osRef ?? null,
     initialType: d.initialType ?? null,
     resultOutcome: inResult ? (d.osRef ? "booked" : "parked") : null,
+    lostReason: d.lostReason ?? null,
+    lostAt: d.lostDaysAgo !== undefined ? daysAgo(d.lostDaysAgo) : null,
+    revisitDate: d.revisitDate ? new Date(d.revisitDate) : null,
     retryAt: inResult
       ? (d.metrics?.find((m) => m.label === "RETRY")?.value ?? null)
       : null,

@@ -40,6 +40,11 @@ export interface DealFixture {
   initialType?: string;
   /** The job whose crew this neighbour walked past. */
   sourcedFromDealId?: string;
+  /** Lost stages only. Both are required together — a loss with no reason is a gap. */
+  lostReason?: string;
+  lostDaysAgo?: number;
+  /** Paused stages only. ISO date the deal comes due again. */
+  revisitDate?: string;
 }
 
 export const DEAL_FIXTURES: DealFixture[] = [
@@ -444,6 +449,10 @@ export const DEAL_FIXTURES: DealFixture[] = [
     },
     act: "Log Call",
     quick: true,
+    // The paused case the reconcile doc names: a real date, so the deal is
+    // measured by "is it due yet" rather than tripping the 45-day rule while
+    // sitting exactly where somebody deliberately put it.
+    revisitDate: "2027-01-08",
   },
 
   {
@@ -663,7 +672,46 @@ export const DEAL_FIXTURES: DealFixture[] = [
     },
     act: "Log Call",
     quick: true,
+    // Dormant is a paused stage, so neglect no longer watches it. Without a
+    // date this partner was excluded from that alert and generated no revisit
+    // signal either — invisible at 152 days silent. Six weeks out puts it back
+    // on a list and matches the rule paused stages now enforce.
+    revisitDate: "2026-09-14",
   },
+  {
+    /*
+     * The Residential loss the revival trigger was written for and has never
+     * had. Lost on price eight months ago, so the six-month cooling period is
+     * comfortably past and the flow is demonstrable rather than theoretical.
+     * `lostReason` is what the trigger selects on — a loss without one is a
+     * deal that vanished, not a deal we can win back.
+     */
+    id: "r12",
+    pipe: "resi",
+    track: "revival",
+    stage: "resi-lost",
+    name: "Colm Ferreira",
+    account: "934 Kennedy St NW",
+    tags: ["DIRECT HOMEOWNER", "INTERIOR"],
+    source: "Google Ads",
+    owner: { initials: "DK", name: "Dani Koval", agent: false },
+    assignedBy: "Self-sourced",
+    stale: "lost 8 mo ago",
+    metrics: [
+      { label: "LOST FOR", value: "Price" },
+      { label: "ORIGINAL", value: "$7,900" },
+    ],
+    next: {
+      label: "Revival window open — 8 months since the quote",
+      due: "Mon 9:00 AM",
+      state: "ok",
+    },
+    act: "Log Call",
+    quick: true,
+    lostReason: "price",
+    lostDaysAgo: 243,
+  },
+
   /* -----------------------------------------------------------------------
      New Leads — net-new residential demand. Nobody here has worked with us
      before, so there is no history to lean on and speed to first contact is

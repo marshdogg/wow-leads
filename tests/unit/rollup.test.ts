@@ -88,6 +88,10 @@ describe("$ in stage roll-up", () => {
       submitted: "$244K in stage",
       negotiation: "$88K in stage",
       hold: "$132K in stage",
+      // The outcome stages exist on every pipeline now and start empty. Null
+      // rather than "$0K in stage" — nothing closed is not zero value.
+      "comm-won": null,
+      "comm-lost": null,
     });
   });
 });

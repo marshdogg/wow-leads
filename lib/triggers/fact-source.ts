@@ -16,7 +16,7 @@ import {
 import { isCustomerContactChannel } from "@/lib/repositories/rules";
 import { enquiryChannelFor } from "./never-quoted";
 import { isPaidSource } from "./speed-to-lead";
-import type { ContactChannel, TriggerType } from "@/lib/types";
+import { LOST_REASONS, type ContactChannel, type LostReason, type TriggerType } from "@/lib/types";
 import { daysBetween, monthName } from "./dates";
 import {
   dayInSequence,
@@ -494,19 +494,30 @@ function sentApprovalCount(
    Revival
    ------------------------------------------------------------------------- */
 
+/**
+ * A lost deal, from the columns that record the loss.
+ *
+ * `lostReason` and `lostAt` are set on entry to a `lost` stage and are the
+ * only things read here. What this replaced: a `LOST FOR` card metric matched
+ * against a substring list, a touchpoint body scanned for "lost" or "went
+ * with", and `deals.stale` parsed for "lost 6 mo ago" — three inferences, any
+ * of which could disagree with the other two, deciding whether a real customer
+ * gets a discount offer.
+ *
+ * A deal with no `lostReason` is not a candidate. That is stricter than the
+ * old `track === "revival"` shape check and deliberately so: a track is a
+ * label somebody applied, and the whole point of the structured field is that
+ * the loss is now recorded rather than inferred.
+ */
 export function revivalFacts(ctx: FactContext, deal: DealRow): RevivalFacts | null {
   if (deal.pipelineId !== "resi") return null;
 
-  const lostReason = metricValue(deal, "LOST FOR") ?? metricValue(deal, "RESULT");
-  if (!lostReason && deal.track !== "revival") return null;
-
-  const events = dealTouchpoints(ctx, deal);
-  const lossEvent = [...events]
-    .reverse()
-    .find((t) => /\blost\b|\bdeclined\b|\bwent with\b/i.test(t.body));
-  const lostAt =
-    lossEvent?.occurredAt ??
-    (deal.stale.includes("lost") ? parseRelativeStale(deal.stale, ctx.now) : null);
+  // The column is `text`, so the union is not enforced by the database yet.
+  // An unrecognised value is not a candidate: this predicate decides whether a
+  // real customer gets a discount offer, and the one thing that must never
+  // happen is a value we cannot classify being treated as a price objection.
+  const lostReason = asLostReason(deal.lostReason);
+  if (!lostReason) return null;
 
   const workType = workTypeOf(deal);
 
@@ -515,7 +526,7 @@ export function revivalFacts(ctx: FactContext, deal: DealRow): RevivalFacts | nu
     dealId: deal.id,
     dealName: deal.name,
     contact: contactFacts(ctx, deal),
-    lostAt,
+    lostAt: deal.lostAt,
     lostReason,
     originalValue: metricValue(deal, "ORIGINAL"),
     originalScope: `${workType} repaint`,
@@ -606,6 +617,13 @@ function findReference(ctx: FactContext, deal: DealRow): SequenceReference | nul
 /* -------------------------------------------------------------------------
    Small helpers
    ------------------------------------------------------------------------- */
+
+/** The stored loss reason, or null when it is absent or not one we know. */
+function asLostReason(value: string | null): LostReason | null {
+  if (!value) return null;
+  const match = LOST_REASONS.find((r) => r === value.toLowerCase().trim());
+  return match ?? null;
+}
 
 function byId<T>(rows: T[], key: (row: T) => string): Map<string, T> {
   return new Map(rows.map((row) => [key(row), row]));

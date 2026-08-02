@@ -1,4 +1,4 @@
-import type { ContactChannel, TriggerType } from "@/lib/types";
+import type { ContactChannel, LostReason, TriggerType } from "@/lib/types";
 
 /**
  * Trigger facts and evaluation contract.
@@ -120,10 +120,18 @@ export interface RevivalFacts {
   dealId: string;
   dealName: string;
   contact: ContactFacts;
-  /** When the deal was recorded as lost. */
+  /**
+   * When the deal was recorded as lost — the `lostAt` column, set on entry to
+   * a `lost` stage. Never parsed out of "lost 6 mo ago" or a touchpoint body.
+   */
   lostAt: Date | null;
-  /** The recorded objection: "Price", "Timing", … */
-  lostReason: string | null;
+  /**
+   * The structured objection, not prose. A closed set is what makes this
+   * trigger buildable at all: the PRD specced re-engaging deals lost on price,
+   * and until the column existed the predicate was matching substrings against
+   * a card metric somebody typed.
+   */
+  lostReason: LostReason | null;
   /** The quote they walked away from, as displayed: "$5,600". */
   originalValue: string | null;
   /** "exterior repaint" — the scope that is still open. */

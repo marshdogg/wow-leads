@@ -5,7 +5,12 @@ import { useRouter } from "next/navigation";
 import { ChevronDown, ChevronUp, EllipsisVertical } from "lucide-react";
 import { AiDraftChip, TrackChip } from "@/components/card/TrackChip";
 import { OwnerBadge } from "@/components/card/OwnerBadge";
-import { AUTOMATED_TRACK_STYLE, TRACK_STYLE } from "@/lib/pipelines";
+import {
+  AUTOMATED_TRACK_STYLE,
+  columnTitleColor,
+  SEMANTIC_STYLE,
+  TRACK_STYLE,
+} from "@/lib/pipelines";
 import type {
   Deal,
   ListSort,
@@ -16,6 +21,27 @@ import type {
 import { nextSort, sortDeals } from "./sort";
 
 const GRID = "2.1fr 1.05fr 1fr 1.5fr 1.1fr 0.85fr 40px";
+
+/**
+ * The stage cell's colour, from the stage's semantics — never its id.
+ *
+ * `columnTitleColor` is calibrated for a 15px board column heading on its own
+ * panel. Dropped straight into a 13px cell in a dense table it makes every
+ * ordinary row as loud as the lead's name beside it, so the neutral semantic
+ * types fall back to the table's own secondary tone and only the types that
+ * actually carry a signal — paused amber, lost dusty, won green — come
+ * through.
+ *
+ * "Carries a signal" is derived by comparing against `open`'s colour rather
+ * than listing the types, so a sixth semantic type added later is handled
+ * without anyone remembering to come back here.
+ */
+function stageCellColor(stage: StageConfig | undefined): string {
+  const SECONDARY = "#c6cdc6";
+  if (!stage) return SECONDARY;
+  const semantic = columnTitleColor(stage);
+  return semantic === SEMANTIC_STYLE.open.title ? SECONDARY : semantic;
+}
 
 const HEADS: { id: ListSortKey; label: string; align?: "right" }[] = [
   { id: "name", label: "LEAD" },
@@ -248,7 +274,7 @@ function ListRow({
       <div
         style={{
           fontSize: 13,
-          color: stage?.titleColor ?? "#c6cdc6",
+          color: stageCellColor(stage),
         }}
       >
         {stage?.label ?? "—"}

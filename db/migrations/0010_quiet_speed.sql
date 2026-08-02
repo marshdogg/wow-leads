@@ -1,0 +1,2 @@
+ALTER TABLE "deals" ADD CONSTRAINT "deals_lost_reason_chk" CHECK (lost_reason is null or lost_reason in ('not interested','unqualified','price','timing','competitor','no response','other'));--> statement-breakpoint
+ALTER TABLE "deals" ADD CONSTRAINT "deals_lost_pair_chk" CHECK ((lost_reason is null) = (lost_at is null));

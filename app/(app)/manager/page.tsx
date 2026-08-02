@@ -4,6 +4,7 @@ import { JobSiteAttribution } from "@/components/manager/JobSiteAttribution";
 import { Leaderboard } from "@/components/manager/Leaderboard";
 import { NeglectedPanel } from "@/components/manager/NeglectedPanel";
 import { PipelineHealth } from "@/components/manager/PipelineHealth";
+import { RevisitDuePanel } from "@/components/manager/RevisitDuePanel";
 import { ProspectMetrics } from "@/components/manager/ProspectMetrics";
 import { SourceRoi } from "@/components/manager/SourceRoi";
 import {
@@ -16,6 +17,7 @@ import {
 import {
   getJobSiteAttribution,
   getNeglectedDeals,
+  getRevisitDue,
 } from "@/lib/repositories/deals";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +27,7 @@ export const metadata: Metadata = { title: "Manager dashboard · WOW Leads" };
 export default async function ManagerPage() {
   const [
     neglected,
+    revisitDue,
     neglectedValue,
     leaderboard,
     health,
@@ -33,6 +36,7 @@ export default async function ManagerPage() {
     jobSite,
   ] = await Promise.all([
     getNeglectedDeals(),
+    getRevisitDue(),
     getNeglectedValue(),
     getLeaderboard(),
     getPipelineHealth(),
@@ -63,7 +67,12 @@ export default async function ManagerPage() {
         </div>
       </div>
 
+      {/* Two signals, adjacent and distinct. Neglect is "nobody is on this";
+          revisit-due is "the date you chose has arrived". Stacking them keeps
+          both in the manager's first screenful without letting either borrow
+          the other's urgency. */}
       <NeglectedPanel rows={neglected} total={neglectedValue} />
+      <RevisitDuePanel rows={revisitDue} />
 
       {/* Stacks below md — effort above, outcomes below. */}
       <div

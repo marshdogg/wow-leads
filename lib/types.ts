@@ -19,23 +19,38 @@ export type ResiStageId =
   | "second"
   | "promo"
   | "followed"
-  | "result";
+  // `result` is the Won stage. The id is stable by design — renaming a stage
+  // never changes it, so the two seeded deals and their history follow.
+  | "result"
+  | "resi-lost";
 export type CommStageId =
   | "prospect"
   | "invited"
   | "takeoff"
   | "submitted"
   | "negotiation"
-  | "hold";
-export type BizdevStageId = "initial" | "followup" | "meeting";
-export type PartnerStageId = "identified" | "introduced" | "active" | "dormant";
+  | "hold"
+  | "comm-won"
+  | "comm-lost";
+export type BizdevStageId =
+  | "initial"
+  | "followup"
+  | "meeting"
+  | "bizdev-lost";
+export type PartnerStageId =
+  | "identified"
+  | "introduced"
+  | "active"
+  | "dormant"
+  | "partner-lost";
 /** Net-new demand. Speed is the whole game, hence the short ladder. */
 export type NewLeadStageId =
   | "new"
   | "contacted"
   | "qualified"
   | "booked"
-  | "nurture";
+  | "nurture"
+  | "newleads-lost";
 
 export type StageId =
   | ResiStageId
@@ -64,14 +79,49 @@ export type NewLeadTrackId = "inbound" | "canvassed" | "event";
 export type TrackId = ResiTrackId | NewLeadTrackId;
 export type TrackFilterId = "all" | TrackId;
 
+/**
+ * What a stage *means*, as distinct from what it is called.
+ *
+ * Styling, win-rate maths, roll-up reporting and neglect alerts all key off
+ * this and never off a stage id or label — which is what makes stages safe to
+ * configure. A franchise can invent "Awaiting Permit", tag it `paused`, and
+ * every dashboard keeps working with no code change. It is also what lets
+ * corporate compare markets whose boards don't align: "Bid Submitted" here and
+ * "Quote Out" there both roll up as `open`. Addendum §3.2, §3.5.
+ */
+export type SemanticType = "open" | "positive" | "paused" | "won" | "lost";
+
 export interface StageConfig {
+  /** Stable and machine-generated. A rename never changes it, so history, triggers and reports follow. */
   id: StageId;
   label: string;
   hint: string;
-  /** Positive/active stages get a green column border. */
-  positive?: boolean;
-  /** Overrides the default column-title colour (On-Hold amber, Dormant dusty). */
-  titleColor?: string;
+  semanticType: SemanticType;
+  /** Optional colour override. Absent means the semantic type decides. */
+  accent?: string;
+  /** Show the `$X in stage` roll-up on this column. */
+  showValueRoll?: boolean;
+  /** Force a structured reason on entry. Defaults true for `lost`. */
+  requiresReason?: boolean;
+  /**
+   * Force a revisit date on entry. Defaults true for `paused`.
+   *
+   * Addendum §3.2 defines paused as "live but on hold (needs revisit date)",
+   * and without this the parenthetical is unenforced: a paused deal is
+   * excluded from neglect, so one with no revisit date generates no signal at
+   * all and falls out of both alerts. Removing a false positive by creating a
+   * false negative is the worse trade — a noisy alert gets ignored, a missing
+   * one gets trusted.
+   */
+  requiresRevisitDate?: boolean;
+  /** Overrides the pipeline's threshold. See `resolveNeglectDays`. */
+  neglectDays?: number;
+  /** The landing column for new deals in this pipeline. */
+  isDefault?: boolean;
+  /** Corporate spine: renameable and reorderable, never removable. */
+  locked?: boolean;
+  /** Archived stages stay renderable in historical timelines. */
+  active?: boolean;
 }
 
 /**
@@ -156,8 +206,35 @@ export interface NextAction {
   state: NextActionState;
 }
 
-/** Residential Result stage resolves to one of these. See DECISIONS.md #2. */
+/**
+ * *Disposition*, not outcome — see DECISIONS.md #2.
+ *
+ * Outcome is the stage's `semanticType` (did we win or lose?). Disposition is
+ * what happens next, and both of these live inside `won`: a re-marketing touch
+ * that lands an estimate and one that earns a committed retry date are both
+ * successes. Rendered on the card's metric strip.
+ */
 export type ResultOutcome = "booked" | "parked";
+
+/** Required on entry to any `lost` stage. Addendum §2.3. */
+export type LostReason =
+  | "not interested"
+  | "unqualified"
+  | "price"
+  | "timing"
+  | "competitor"
+  | "no response"
+  | "other";
+
+export const LOST_REASONS: LostReason[] = [
+  "not interested",
+  "unqualified",
+  "price",
+  "timing",
+  "competitor",
+  "no response",
+  "other",
+];
 
 export interface Deal {
   id: string;
@@ -198,6 +275,15 @@ export interface Deal {
   /** Residential Result, parked: when to retry. */
   retryAt?: string | null;
   accountId?: string | null;
+  /** Set on entry to a `lost` stage. The revival trigger keys off both. */
+  lostReason?: LostReason | null;
+  lostAt?: Date | null;
+  /**
+   * When a paused deal becomes actionable again. Replaces the neglect rule for
+   * `paused` stages — a deal parked on purpose is not neglected, but it does
+   * come due.
+   */
+  revisitDate?: Date | null;
   /**
    * The job that produced this lead — a neighbour who asked about their trim
    * while we were painting next door. Makes "this $8,400 job generated three

@@ -11,16 +11,50 @@ spec (`design-refs/README.md`) explicitly left open.
    with the "15% spring interior" offer seeded as `SPRING15` (type `direct`) and
    linked to deal `r5`. A table rather than an enum because promo authorship and
    windows are operational data that changes without a deploy.
-2. **Residential Result stage** — resolves to a sub-outcome rather than
+2. **Residential Result stage** — ~~resolves to a sub-outcome rather than
    Won/Lost: `booked` (carries an `osRef`) or `parked` (carries a retry date).
-   Both live in Result; the card's metric strip shows which. Matches the
-   prototype's two Result cards — Lorna Kirkbride (booked, EST-40218) and
-   Simone Achterberg (parked, retry Spring 2027).
+   Both live in Result; the card's metric strip shows which.~~
+   **Superseded** by `RECONCILE-outcomes-and-neglect.md`, which identified that
+   this conflated two different axes. Neither `booked` nor `parked` is a loss,
+   so a lead saying "never contact me again" had nowhere to go, Residential win
+   rate was uncomputable, and the Lost-Lead Revival trigger had no Residential
+   path. The original reasoning was right about *disposition* and silent about
+   *outcome*:
+   - **Outcome** is the stage's `semanticType` — `won` or `lost`. It drives
+     win-rate maths, roll-up reporting and styling.
+   - **Disposition** is the sub-outcome on the deal — `booked` or `parked`.
+     Both sit **inside `won`**: a re-marketing touch that lands an estimate and
+     one that earns a committed retry date are both successes. The metric-strip
+     rendering and both seeded examples (Lorna Kirkbride → booked, EST-40218;
+     Simone Achterberg → parked, retry Spring 2027) are preserved intact.
+
+   `Result` was renamed to **Won** and **kept its id** (`result`): a rename
+   must never move history, so the seeded deals and their timelines follow.
+   A `Lost` stage is new, and entry requires `lostReason` + `lostAt`. The same
+   treatment was applied wherever a pipeline lacked an explicit outcome —
+   Commercial's On-Hold became a parallel `paused` state with a revisit date
+   rather than the terminal column. A pipeline can no longer be saved without
+   at least one `won` and one `lost` stage, which is the rule that stops this
+   recurring.
 3. **Neglect threshold** — per-pipeline, stored as `pipelines.neglect_days`:
    **14 days** for Residential, Biz Dev and Partner, **45 days** for Commercial,
    because commercial bid cycles run months and a 14-day rule would flag every
-   healthy bid. See the consequence logged under "Divergences from the
-   prototype" below.
+   healthy bid. Those values were correctly reasoned and remain the pipeline
+   defaults.
+   **Extended** by `RECONCILE-outcomes-and-neglect.md`, which layered a
+   per-stage override on top and excluded stages by semantic type. Resolution
+   is most-specific-wins: `stage.neglectDays` → `pipeline.neglect_days` →
+   `DEFAULT_NEGLECT_DAYS`.
+
+   The defect this closed: a Commercial bid moved to On-Hold with a revisit
+   date six months out still tripped the 45-day rule. It was flagged as
+   neglected while sitting exactly where somebody deliberately put it — a false
+   positive by design, and the failure mode that teaches people to ignore the
+   alert. So `paused` stages are excluded from neglect entirely, and `won` and
+   `lost` are excluded as closed. A paused deal instead comes due when its
+   `revisitDate` passes, surfaced as its own "revisit due" signal next to
+   neglect on the manager dashboard but visually distinct, because the two mean
+   different things to whoever is reading it.
 4. **Record screen field set** — built to the handoff spec, with every field
    label held in `lib/record-fields.ts` as typed config so the set can be
    remapped without touching a component. **This needs sign-off against the real
@@ -29,13 +63,17 @@ spec (`design-refs/README.md`) explicitly left open.
 
 ## Divergences from the prototype
 
-- **Neglected deals shows 3, not 4.** The prototype hard-codes a 4-row / $139K
-  neglected fixture that includes `c3` (Ivy City Warehouse, Commercial, 16 days
-  silent). Under the 45-day Commercial threshold resolved above, `c3` is not
-  neglected. The dashboard computes the list, the count and the total from the
-  data rather than reproducing the fixture, so it shows `b4` (21d), `r4` (19d)
-  and `p5` (152d). Reverting to 4 rows means changing the Commercial threshold,
-  not the query.
+- **Neglected deals shows 4, and not the prototype's 4.** The prototype
+  hard-codes a 4-row / $139K fixture. The dashboard computes the list from the
+  data instead, and the membership is entirely different. Under the 45-day
+  Commercial threshold, `c3` (16 days silent) is not neglected. Under the
+  semantic-type exclusions added by the reconciliation, `p5` dropped out too —
+  it sits in `dormant`, a `paused` stage, and a deal parked on purpose is not
+  neglected. What remains is `r11` (22d), `b4` (21d), `r4` (19d) and `n2` (1d,
+  against the New Leads one-day threshold). `r2` and `r6` look long-silent but
+  are correctly excluded by the "no on-time next action booked" clause.
+  Reverting any of this means changing a threshold or a semantic type, not the
+  query.
 - **"WHY THIS FIRED" reasons render as green ✓ marks, not numbered bullets.**
   The build brief said numbered; the prototype — which the handoff spec declares
   final-intent on fidelity — uses ✓. Fidelity won.

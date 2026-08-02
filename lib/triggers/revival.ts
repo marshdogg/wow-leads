@@ -1,5 +1,6 @@
 import { monthsBetween, monthYear } from "./dates";
 import { lowerFirst, pluralMonths } from "./text";
+import type { LostReason } from "@/lib/types";
 import type { RevivalFacts, TriggerDefinition } from "./types";
 
 /**
@@ -14,19 +15,36 @@ import type { RevivalFacts, TriggerDefinition } from "./types";
  * months reads as desperation; at six it reads as a new offer. And if anyone
  * has spoken to them since the loss, the revival is already happening
  * without an agent.
+ *
+ * **This selects on `lostReason`, a structured column, and nothing else.**
+ * The PRD specced re-engaging deals lost on price and there was no such field,
+ * so the first version matched substrings — "price", "cost", "budget" — against
+ * whatever a rep had typed into a `LOST FOR` card metric. That is a headline
+ * automation resting on free text: "we went with a cheaper crew" is a
+ * competitor loss that reads as a price objection, and "priced out of our
+ * timeline" is a timing loss containing the word. There is deliberately no
+ * fallback to the old inference. Two ways of deciding the same thing is the
+ * arrangement this codebase keeps removing.
  */
 
 /** How long a price objection has to cool before it is worth reopening. */
 export const COOLING_MONTHS = 6;
 
-/** Objections a revival can address. Quality and trust losses are not these. */
-const PRICE_OBJECTIONS = ["price", "cost", "budget", "too expensive", "quote"];
-
-export function isPriceObjection(reason: string | null): boolean {
-  if (!reason) return false;
-  const normalised = reason.toLowerCase();
-  return PRICE_OBJECTIONS.some((term) => normalised.includes(term));
-}
+/**
+ * How each objection reads mid-sentence, for the bullet that explains why a
+ * revival did *not* fire. A `Record` rather than a lookup with a default, so
+ * adding a reason to `LostReason` fails the build here rather than silently
+ * rendering the enum value into a sentence it does not fit.
+ */
+const OBJECTION_PHRASE: Record<LostReason, string> = {
+  "not interested": "lack of interest",
+  unqualified: "the lead not qualifying",
+  price: "price",
+  timing: "timing",
+  competitor: "a competitor",
+  "no response": "no response",
+  other: "a reason nobody recorded",
+};
 
 export function evaluateRevival(facts: RevivalFacts): {
   eligible: boolean;
@@ -35,21 +53,23 @@ export function evaluateRevival(facts: RevivalFacts): {
   const { lostAt, lostReason, originalValue, originalScope, lastContactAt, now } =
     facts;
 
-  if (!lostAt) {
-    return {
-      eligible: false,
-      reasons: ["No loss date on the record — cannot date the cooling period"],
-    };
-  }
-
-  if (!isPriceObjection(lostReason)) {
+  if (lostReason !== "price") {
     return {
       eligible: false,
       reasons: [
         lostReason
-          ? `Lost on ${lowerFirst(lostReason)}, not price — a discount is not the answer`
+          ? `Lost on ${OBJECTION_PHRASE[lostReason]}, not price — a discount is not the answer`
           : "No objection recorded on the loss — nothing for a revival to address",
       ],
+    };
+  }
+
+  if (!lostAt) {
+    return {
+      eligible: false,
+      // A lost deal is supposed to carry both; one without the other is a data
+      // defect, not a state, so it says so rather than guessing a date.
+      reasons: ["No loss date on the record — cannot date the cooling period"],
     };
   }
 

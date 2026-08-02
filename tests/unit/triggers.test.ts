@@ -10,7 +10,7 @@ import {
   MIN_DAYS_SINCE_SEND,
   evaluateSeasonal,
 } from "@/lib/triggers/seasonal";
-import { COOLING_MONTHS, evaluateRevival, isPriceObjection } from "@/lib/triggers/revival";
+import { COOLING_MONTHS, evaluateRevival } from "@/lib/triggers/revival";
 import { evaluateSequence, stepDueAt } from "@/lib/triggers/sequence";
 import {
   CREW_WINDOW_DAYS,
@@ -49,7 +49,7 @@ const DEFAULT_TEMPLATES: MessageTemplate[] = TEMPLATE_FIXTURES.map((t) => ({
   updatedAt: new Date(2026, 0, 1 + (100 - t.order)),
 }));
 import type { TriggerFacts } from "@/lib/triggers/types";
-import type { PipelineId, StageId, TrackId } from "@/lib/types";
+import { LOST_REASONS, type PipelineId, type StageId, type TrackId } from "@/lib/types";
 
 /**
  * Draft through the real path: resolve a shipped template against these facts
@@ -210,7 +210,7 @@ function revival(overrides: Partial<RevivalFacts> = {}): RevivalFacts {
     dealName: "Rudy Kaminski",
     contact: rudy,
     lostAt: new Date(2026, 0, 20), // 6 months before NOW
-    lostReason: "Price",
+    lostReason: "price",
     originalValue: "$5,600",
     originalScope: "Exterior repaint",
     lastContactAt: new Date(2026, 0, 20),
@@ -453,10 +453,29 @@ describe("revival trigger", () => {
     expect(result.reasons[0]).toContain("cooling period still to run");
   });
 
-  it("does not fire on a loss that was not about price", () => {
-    const result = evaluateRevival(revival({ lostReason: "Quality concerns" }));
-    expect(result.eligible).toBe(false);
-    expect(result.reasons[0]).toContain("not price");
+  it("does not fire on any loss that was not about price", () => {
+    // Every other reason, so adding one to `LostReason` without deciding
+    // whether a revival addresses it fails here rather than in production.
+    const others = LOST_REASONS.filter((r) => r !== "price");
+    expect(others).toHaveLength(6);
+    for (const lostReason of others) {
+      const result = evaluateRevival(revival({ lostReason }));
+      expect(result.eligible).toBe(false);
+      expect(result.reasons[0]).toContain("not price");
+      // The phrase map has to produce a sentence, not `undefined`.
+      expect(result.reasons[0]).not.toContain("undefined");
+    }
+  });
+
+  it("reads each objection as a phrase rather than an enum value", () => {
+    // "Lost on not interested, not price" is what a lookup with no phrase map
+    // produces, and it is not a sentence anybody would write.
+    expect(evaluateRevival(revival({ lostReason: "not interested" })).reasons[0]).toBe(
+      "Lost on lack of interest, not price — a discount is not the answer",
+    );
+    expect(evaluateRevival(revival({ lostReason: "competitor" })).reasons[0]).toBe(
+      "Lost on a competitor, not price — a discount is not the answer",
+    );
   });
 
   it("does not fire when no objection was recorded", () => {
@@ -477,13 +496,16 @@ describe("revival trigger", () => {
     expect(result.reasons[0]).toContain("No loss date");
   });
 
-  it("recognises the ways a price objection gets written down", () => {
-    for (const reason of ["Price", "price", "Too expensive", "Budget", "Cost"]) {
-      expect(isPriceObjection(reason)).toBe(true);
-    }
-    for (const reason of ["Timing", "Quality", "Went with a friend", null]) {
-      expect(isPriceObjection(reason)).toBe(false);
-    }
+  it("selects on the structured reason, not on prose that mentions price", () => {
+    // The regression the column exists to prevent. The old predicate matched
+    // substrings against a typed-in card metric, so both of these fired: one
+    // is a competitor loss that happens to be about cost, the other a timing
+    // loss containing the word "priced". Only `lostReason` decides now.
+    expect(evaluateRevival(revival({ lostReason: "competitor" })).eligible).toBe(
+      false,
+    );
+    expect(evaluateRevival(revival({ lostReason: "timing" })).eligible).toBe(false);
+    expect(evaluateRevival(revival({ lostReason: "price" })).eligible).toBe(true);
   });
 
   it("cools for six months", () => {

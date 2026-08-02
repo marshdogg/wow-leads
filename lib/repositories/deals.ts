@@ -18,6 +18,7 @@ import { appendAudit } from "./audit";
 import { toDeal, type DealRow } from "./mappers";
 import {
   AGENT_NAMES,
+  StageTransitionError,
   assertStageInPipeline,
   compactMoney,
   daysSince,
@@ -26,7 +27,18 @@ import {
   metricThousands,
   rollupStageValue,
 } from "./rules";
-import type { Deal, DealMetric, NextActionState, PipelineId } from "@/lib/types";
+import {
+  resolveNeglectDays,
+  stageCountsForNeglect,
+} from "@/lib/pipelines";
+import type {
+  Deal,
+  DealMetric,
+  LostReason,
+  NextActionState,
+  PipelineId,
+  SemanticType,
+} from "@/lib/types";
 
 export { StageTransitionError } from "./rules";
 
@@ -116,15 +128,25 @@ export async function moveDeal(input: {
   dealId: string;
   stageId: string;
   actorUserId: string;
+  /** Required by stages flagged `requiresReason`; enforced below. */
+  lostReason?: LostReason | null;
+  /** Required by stages flagged `requiresRevisitDate` — every paused stage. */
+  revisitDate?: Date | null;
 }): Promise<Deal> {
   const before = await requireDealRow(input.dealId);
 
   // Validate against the stage rows, not the TS union, so a stage added or
   // moved in the database behaves correctly.
   const stageRows = await db
-    .select({ id: stages.id, pipelineId: stages.pipelineId })
+    .select({
+      id: stages.id,
+      pipelineId: stages.pipelineId,
+      semanticType: stages.semanticType,
+      requiresReason: stages.requiresReason,
+      requiresRevisitDate: stages.requiresRevisitDate,
+    })
     .from(stages);
-  assertStageInPipeline(
+  const target = assertStageInPipeline(
     before.id,
     before.pipelineId,
     input.stageId,
@@ -133,19 +155,74 @@ export async function moveDeal(input: {
 
   if (before.stageId === input.stageId) return toDeal(before);
 
+  const stage = stageRows.find((s) => s.id === input.stageId);
+
+  /*
+   * A reason-requiring stage cannot be entered without one, enforced here as
+   * well as at the action boundary. The action guards the UI path; this guards
+   * every path, including the trigger runner and a script. `lostReason` is
+   * load-bearing twice — it splits the win rate and it is what the Lost-Lead
+   * Revival trigger selects on — so a deal closed without one looks fine on
+   * the board and silently never comes back.
+   */
+  if (stage?.requiresReason && !input.lostReason) {
+    throw new StageTransitionError(
+      `Stage "${input.stageId}" requires a reason. Moving ${before.id} without one would close it in a way nothing can act on later.`,
+    );
+  }
+
+  /*
+   * A paused deal is excluded from neglect on the promise that its revisit
+   * date replaces the rule. Without one it is excluded from neglect *and*
+   * generates no revisit signal — invisible, which is a worse trade than the
+   * false positive the exclusion was built to remove. A noisy alert gets
+   * ignored; a missing one gets trusted.
+   */
+  if (stage?.requiresRevisitDate && !input.revisitDate) {
+    throw new StageTransitionError(
+      `Stage "${input.stageId}" requires a revisit date. Pausing ${before.id} without one hides it from the neglect alert and from the revisit list at the same time.`,
+    );
+  }
+
+  const enteringLost = stage?.semanticType === "lost";
+  const leavingLost = before.stageId !== input.stageId && !enteringLost;
+  const enteringPaused = stage?.semanticType === "paused";
+
   const [after] = await db
     .update(deals)
-    .set({ stageId: input.stageId, updatedAt: new Date() })
+    .set({
+      stageId: input.stageId,
+      // Set together or cleared together — a reason with no date, or a date
+      // with no reason, is a half-recorded loss.
+      lostReason: enteringLost ? (input.lostReason ?? null) : null,
+      lostAt: enteringLost ? new Date() : leavingLost ? null : before.lostAt,
+      // Cleared on the way out for the same reason as the loss pair: a
+      // revisit date on an open deal is a date nothing will ever act on.
+      revisitDate: enteringPaused
+        ? (input.revisitDate ?? null)
+        : before.revisitDate && !enteringPaused
+          ? null
+          : before.revisitDate,
+      updatedAt: new Date(),
+    })
     .where(eq(deals.id, input.dealId))
     .returning();
 
   await appendAudit({
     entity: "deal",
     entityId: input.dealId,
-    action: "move",
+    action: enteringLost ? "lose" : "move",
     userId: input.actorUserId,
-    before: { stageId: before.stageId },
-    after: { stageId: after.stageId },
+    before: {
+      stageId: before.stageId,
+      lostReason: before.lostReason,
+      semanticType: stageRows.find((s) => s.id === before.stageId)?.semanticType,
+    },
+    after: {
+      stageId: after.stageId,
+      lostReason: after.lostReason,
+      semanticType: target.semanticType,
+    },
   });
 
   return toDeal(after);
@@ -391,7 +468,9 @@ export async function getNeglectedDeals(): Promise<NeglectedDeal[]> {
       lastTouchAt: deals.lastTouchAt,
       nextState: deals.nextState,
       createdAt: deals.createdAt,
-      neglectDays: pipelines.neglectDays,
+      semanticType: stages.semanticType,
+      stageNeglectDays: stages.neglectDays,
+      pipelineNeglectDays: pipelines.neglectDays,
     })
     .from(deals)
     .innerJoin(stages, eq(deals.stageId, stages.id))
@@ -400,11 +479,31 @@ export async function getNeglectedDeals(): Promise<NeglectedDeal[]> {
   const now = new Date();
   const neglected: NeglectedDeal[] = [];
   for (const r of rows) {
+    // Closed and paused stages are out entirely, whatever the threshold says.
+    // A bid on hold with a revisit date six months out was tripping the
+    // 45-day rule while sitting exactly where somebody put it — a false
+    // positive by design, and the failure mode that teaches people to ignore
+    // the alert. Paused deals come due by `revisitDate` instead; see
+    // `getRevisitDue`.
+    if (
+      !stageCountsForNeglect({
+        semanticType: r.semanticType as SemanticType,
+      })
+    ) {
+      continue;
+    }
+
+    // Most specific wins: stage override → pipeline default → global.
+    const threshold = resolveNeglectDays(
+      r.stageNeglectDays !== null ? { neglectDays: r.stageNeglectDays } : undefined,
+      r.pipelineNeglectDays,
+    );
+
     const nextState = (r.nextState as NextActionState | null) ?? null;
     // Never contacted? Measure the silence from when the record was created.
     const since = r.lastTouchAt ?? r.createdAt;
     if (
-      !isNeglected(r.lastTouchAt, r.neglectDays, now, nextState, r.createdAt) ||
+      !isNeglected(r.lastTouchAt, threshold, now, nextState, r.createdAt) ||
       !since
     ) {
       continue;
@@ -825,4 +924,81 @@ export async function getPipelineCounts(): Promise<Record<string, number>> {
     .from(deals)
     .groupBy(deals.pipelineId);
   return Object.fromEntries(rows.map((r) => [r.pipelineId, r.n]));
+}
+
+
+/* -------------------------------------------------------------------------
+   Revisit due
+   ------------------------------------------------------------------------- */
+
+export interface RevisitDueDeal {
+  id: string;
+  name: string;
+  account: string;
+  pipeline: string;
+  stage: string;
+  value: string;
+  /**
+   * Days past the revisit date, zero on the day it falls due — or **null when
+   * no revisit date was ever set**, which is the worse case and must not be
+   * silently absent. Excluding paused stages from neglect assumes a date
+   * replaces the rule; where nobody set one, the deal would otherwise appear
+   * on neither dashboard while sitting untouched.
+   */
+  daysOverdue: number | null;
+  revisitDate: Date | null;
+  /** How long since anyone touched it, for the undated case. */
+  daysSilent: number | null;
+}
+
+/**
+ * Paused deals whose revisit date has passed.
+ *
+ * The counterpart to neglect, deliberately a separate signal. A paused deal is
+ * not being ignored — somebody parked it on purpose and named a date. What
+ * makes it actionable is that date arriving, not silence, so it belongs beside
+ * the neglected list rather than inside it.
+ */
+export async function getRevisitDue(now = new Date()): Promise<RevisitDueDeal[]> {
+  const rows = await db
+    .select({
+      id: deals.id,
+      name: deals.name,
+      account: deals.accountLine,
+      pipelineId: deals.pipelineId,
+      stageId: deals.stageId,
+      stageLabel: stages.label,
+      semanticType: stages.semanticType,
+      metrics: deals.metrics,
+      revisitDate: deals.revisitDate,
+      lastTouchAt: deals.lastTouchAt,
+    })
+    .from(deals)
+    .innerJoin(stages, eq(deals.stageId, stages.id));
+
+  const due: RevisitDueDeal[] = [];
+  for (const r of rows) {
+    if (r.semanticType !== "paused") continue;
+    const daysOverdue = r.revisitDate ? daysSince(r.revisitDate, now) : null;
+    // Not due yet is fine — that is the pause working.
+    if (daysOverdue !== null && daysOverdue < 0) continue;
+    due.push({
+      id: r.id,
+      name: r.name,
+      account: r.account,
+      pipeline: PIPELINE_SHORT_LABEL[r.pipelineId] ?? r.pipelineId,
+      stage: STAGE_SHORT_LABEL[r.stageId] ?? r.stageLabel,
+      value: neglectValue(r.metrics),
+      daysOverdue,
+      revisitDate: r.revisitDate,
+      daysSilent: r.lastTouchAt ? daysSince(r.lastTouchAt, now) : null,
+    });
+  }
+  // Undated first: a pause nobody put an end to is the one worth seeing.
+  return due.sort((a, b) => {
+    if ((a.daysOverdue === null) !== (b.daysOverdue === null)) {
+      return a.daysOverdue === null ? -1 : 1;
+    }
+    return (b.daysOverdue ?? 0) - (a.daysOverdue ?? 0);
+  });
 }

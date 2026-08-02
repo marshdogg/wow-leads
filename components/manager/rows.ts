@@ -33,6 +33,60 @@ export function neglectedTotal(rows: readonly NeglectedRow[]): string {
   return sumMoney(rows.map((r) => r.value));
 }
 
+/* -------------------------------------------------------------------------
+   Revisit due
+   ------------------------------------------------------------------------- */
+
+/** Structural mirror of the repository's `RevisitDueDeal`. */
+export interface RevisitDueRow {
+  id: string;
+  name: string;
+  account: string;
+  pipeline: string;
+  stage: string;
+  value: string;
+  /** Null when nobody ever set a revisit date. See `revisitStatus`. */
+  daysOverdue: number | null;
+  daysSilent: number | null;
+}
+
+export interface RevisitStatus {
+  label: string;
+  /** Undated pauses are the worse case and read louder. */
+  tone: "undated" | "overdue" | "today";
+}
+
+/**
+ * What a paused deal's row says on its right-hand side.
+ *
+ * The undated case is not a missing value to render as "—". Excluding paused
+ * stages from neglect assumes a revisit date replaces the rule; where nobody
+ * set one, nothing replaces anything and the deal is parked indefinitely,
+ * absent from both dashboards. That is the one row on this panel worth
+ * chasing, so it says so in words rather than showing a blank.
+ */
+export function revisitStatus(row: RevisitDueRow): RevisitStatus {
+  if (row.daysOverdue === null) {
+    return {
+      label:
+        row.daysSilent === null
+          ? "No revisit date · never touched"
+          : `No revisit date · ${row.daysSilent}d silent`,
+      tone: "undated",
+    };
+  }
+  if (row.daysOverdue === 0) return { label: "Due today", tone: "today" };
+  return {
+    label: `${row.daysOverdue}d past revisit`,
+    tone: "overdue",
+  };
+}
+
+/** How many of these are parked with no way back. */
+export function undatedCount(rows: readonly RevisitDueRow[]): number {
+  return rows.filter((r) => r.daysOverdue === null).length;
+}
+
 /**
  * Sum a set of money display strings back into one. Values arrive formatted
  * ("$96K", "$4.9K est.", "—") because that is what the repositories return;

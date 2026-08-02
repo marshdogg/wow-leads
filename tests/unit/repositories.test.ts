@@ -6,7 +6,14 @@ import {
   nextDueFrom,
   staleDays,
 } from "@/lib/fixtures/time";
-import { PIPELINE_IDS, PIPES } from "@/lib/pipelines";
+import {
+  DEFAULT_NEGLECT_DAYS,
+  PIPELINE_IDS,
+  PIPES,
+  resolveNeglectDays,
+  stageCountsForNeglect,
+  winRate,
+} from "@/lib/pipelines";
 import {
   TEMPLATE_FIXTURES,
   type TemplateFixture,
@@ -531,15 +538,20 @@ describe("formatDue", () => {
 });
 
 describe("fixture integrity", () => {
-  it("holds the 25 prototype leads, 2 never-quoted and 5 New Leads fixtures", () => {
-    expect(DEAL_FIXTURES).toHaveLength(32);
-    expect(new Set(DEAL_FIXTURES.map((d) => d.id)).size).toBe(32);
-    // The 25 transcribed from the prototype, plus the two never-quoted leads
-    // added when that track landed — counted apart so a future edit to one
-    // group can't silently absorb the other.
+  it("holds the 25 prototype leads, 3 residential additions and 5 New Leads fixtures", () => {
+    // 25 prototype + r10/r11 (never quoted) + r12 (lost on price) + n1–n5.
+    expect(DEAL_FIXTURES).toHaveLength(33);
+    expect(new Set(DEAL_FIXTURES.map((d) => d.id)).size).toBe(33);
+    // The 25 transcribed from the prototype, counted apart from every later
+    // addition so a future edit to one group cannot silently absorb another.
+    // r12 is the lost-on-price deal the revival trigger needed and is excluded
+    // here for the same reason the never-quoted pair is.
     expect(
       DEAL_FIXTURES.filter(
-        (d) => d.pipe !== "newleads" && d.track !== "neverquoted",
+        (d) =>
+          d.pipe !== "newleads" &&
+          d.track !== "neverquoted" &&
+          d.lostReason === undefined,
       ),
     ).toHaveLength(25);
     expect(
@@ -844,5 +856,92 @@ describe("campaigns and the jobs they read", () => {
       expect(Number.isInteger(j.valueCents)).toBe(true);
       expect(j.valueCents).toBeGreaterThan(0);
     }
+  });
+});
+
+
+describe("semantic stages drive neglect", () => {
+  it("excludes paused, won and lost from neglect; includes open and positive", () => {
+    // Nothing keys off a stage id or label, so a franchise inventing
+    // "Awaiting Permit" tags it paused and the rule already knows what to do.
+    for (const semanticType of ["open", "positive"] as const) {
+      expect(stageCountsForNeglect({ semanticType })).toBe(true);
+    }
+    for (const semanticType of ["paused", "won", "lost"] as const) {
+      expect(stageCountsForNeglect({ semanticType })).toBe(false);
+    }
+  });
+
+  it("resolves the threshold most-specific-first", () => {
+    expect(resolveNeglectDays({ neglectDays: 3 }, 45)).toBe(3);
+    expect(resolveNeglectDays(undefined, 45)).toBe(45);
+    expect(resolveNeglectDays(undefined, undefined)).toBe(DEFAULT_NEGLECT_DAYS);
+    // A stage override of 0 is a real value, not an absent one.
+    expect(resolveNeglectDays({ neglectDays: 0 }, 45)).toBe(0);
+  });
+
+  it("gives every pipeline a way to say how things ended", () => {
+    // The validation that stops this class of gap recurring: without a won and
+    // a lost stage, a Residential lead saying "never contact me again" has
+    // nowhere to go and win rate is uncomputable.
+    for (const id of PIPELINE_IDS) {
+      const kinds = new Set(PIPES[id].stages.map((s) => s.semanticType));
+      expect({ id, won: kinds.has("won"), lost: kinds.has("lost") }).toEqual({
+        id,
+        won: true,
+        lost: true,
+      });
+    }
+  });
+
+  it("keeps booked and parked as dispositions inside a win", () => {
+    // The whole of conflict 1: outcome is the stage, disposition is the deal.
+    // A re-marketing touch that lands an estimate and one that earns a
+    // committed retry date are both successful outcomes of the touch.
+    const won = PIPES.resi.stages.find((s) => s.semanticType === "won")!;
+    expect(won.id).toBe("result");
+    for (const id of ["r8", "r9"]) {
+      const deal = DEAL_FIXTURES.find((d) => d.id === id)!;
+      expect({ id, stage: deal.stage }).toEqual({ id, stage: "result" });
+    }
+    expect(DEAL_FIXTURES.find((d) => d.id === "r8")!.osRef).toBe("EST-40218");
+  });
+
+  it("demands a reason on every lost stage", () => {
+    for (const id of PIPELINE_IDS) {
+      for (const stage of PIPES[id].stages) {
+        if (stage.semanticType !== "lost") continue;
+        expect({ stage: stage.id, reason: stage.requiresReason !== false }).toEqual(
+          { stage: stage.id, reason: true },
+        );
+      }
+    }
+  });
+
+  it("seeds a residential loss the revival trigger can actually fire on", () => {
+    // The trigger selects on `lostReason = price` past a six-month cooling
+    // period, and until now had nothing to target.
+    const lost = DEAL_FIXTURES.find((d) => d.lostReason === "price")!;
+    expect(lost.pipe).toBe("resi");
+    expect(lost.stage).toBe("resi-lost");
+    expect(lost.lostDaysAgo).toBeGreaterThan(182);
+  });
+
+  it("gives the paused commercial bid a real revisit date", () => {
+    const c6 = DEAL_FIXTURES.find((d) => d.id === "c6")!;
+    expect(c6.stage).toBe("hold");
+    expect(PIPES.comm.stages.find((s) => s.id === "hold")!.semanticType).toBe(
+      "paused",
+    );
+    expect(c6.revisitDate).toBe("2027-01-08");
+  });
+
+  it("computes win rate from semantics, never from labels", () => {
+    const stages = PIPES.resi.stages;
+    expect(
+      winRate(stages, [{ stage: "result" }, { stage: "result" }, { stage: "resi-lost" }]),
+    ).toEqual({ won: 2, lost: 1, rate: 2 / 3 });
+    // Nothing closed is not the same claim as nobody won.
+    expect(winRate(stages, [{ stage: "past" }]).rate).toBeNull();
   });
 });

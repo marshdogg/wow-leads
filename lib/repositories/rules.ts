@@ -21,6 +21,8 @@ export class StageTransitionError extends Error {
 export interface StageLike {
   id: string;
   pipelineId: string;
+  semanticType?: string;
+  requiresReason?: boolean;
 }
 
 /**

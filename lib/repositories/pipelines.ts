@@ -40,8 +40,15 @@ export async function getPipelines(): Promise<PipelineConfig[]> {
         id: s.id as StageId,
         label: s.label,
         hint: s.hint,
-        ...(s.positive ? { positive: true } : {}),
-        ...(s.titleColor ? { titleColor: s.titleColor } : {}),
+        semanticType: s.semanticType as StageConfig["semanticType"],
+        ...(s.accent ? { accent: s.accent } : {}),
+        ...(s.showValueRoll ? { showValueRoll: true } : {}),
+        ...(s.requiresReason ? { requiresReason: true } : {}),
+        ...(s.requiresRevisitDate ? { requiresRevisitDate: true } : {}),
+        ...(s.neglectDays !== null ? { neglectDays: s.neglectDays } : {}),
+        ...(s.isDefault ? { isDefault: true } : {}),
+        ...(s.locked ? { locked: true } : {}),
+        active: s.active,
       })),
   }));
 }
