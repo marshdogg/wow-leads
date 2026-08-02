@@ -118,16 +118,28 @@ export function RevisitDuePanel({ rows }: { rows: RevisitDueRow[] }) {
               >
                 {r.value}
               </div>
-              <div
-                data-testid={`revisit-status-${r.id}`}
-                style={{
-                  fontWeight: 600,
-                  // The undated row is the one worth chasing, so it is the one
-                  // that reads as a problem rather than a date arriving.
-                  color: status.tone === "undated" ? "#f0a294" : "#e0c684",
-                }}
-              >
-                {status.label}
+              <div data-testid={`revisit-status-${r.id}`} style={{ minWidth: 0 }}>
+                <div
+                  style={{
+                    fontWeight: 600,
+                    // The undated row is the one worth chasing, so it is the
+                    // one that reads as a problem rather than a date arriving.
+                    color: status.tone === "undated" ? "#f0a294" : "#e0c684",
+                  }}
+                >
+                  {status.label}
+                </div>
+                {/* The silence, when it says more than the primary number —
+                    twelve days past a revisit is a diary item, the same
+                    partner at 152 days silent is the actual story. */}
+                {status.note ? (
+                  <div
+                    data-testid={`revisit-note-${r.id}`}
+                    style={{ fontSize: 11, color: "#8b948b", marginTop: 2 }}
+                  >
+                    {status.note}
+                  </div>
+                ) : null}
               </div>
             </div>
 

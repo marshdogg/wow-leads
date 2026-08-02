@@ -105,3 +105,57 @@ test("On-Hold is a parallel paused state, not the terminal column", async ({
   await expect(page.getByTestId("column-comm-won")).toBeVisible();
   await expect(page.getByTestId("column-comm-lost")).toBeVisible();
 });
+
+test("pausing a deal prompts for a revisit date and completes", async ({
+  page,
+}) => {
+  /**
+   * This case exists because the paused path was completely broken and stayed
+   * green. The repository throws when a paused stage is entered without a
+   * revisit date, and for a while nothing in the UI collected one — so every
+   * pause bounced and On-Hold, a state the addendum specifically promotes to a
+   * first-class parallel stage, was unreachable from the board. The predicate
+   * and the throw were both unit-tested and both passed; nothing drove the
+   * interaction end to end.
+   */
+  await page.goto("/board?pipeline=comm&view=board");
+
+  const hold = page.getByTestId("column-hold");
+  const negotiation = page.getByTestId("column-negotiation");
+  await expect(negotiation).toContainText("Union Market");
+
+  // Negotiation sits one column left of On-Hold, so this is a single-column
+  // move. The keyboard sensor steps by pixels rather than by column, so press
+  // until the live region names the target.
+  const handle = page.getByLabel(/^Union Market — 3 suites\. Press space/);
+  await expect(handle).toBeVisible();
+  await handle.focus();
+  await page.keyboard.press("Space");
+
+  const live = page.locator("[aria-live]").first();
+  await expect
+    .poll(
+      async () => {
+        await page.keyboard.press("ArrowRight");
+        return (await live.textContent()) ?? "";
+      },
+      { timeout: 20_000, intervals: [120] },
+    )
+    .toContain("droppable area hold");
+  await page.keyboard.press("Space");
+
+  const modal = page.getByTestId("revisit-date-modal");
+  await expect(modal).toBeVisible();
+
+  // A pause takes the deal off the neglect alert, and the date is the only
+  // thing that puts it back — so it cannot be skipped.
+  await expect(page.getByTestId("revisit-date-confirm")).toBeDisabled();
+
+  await page.getByTestId("revisit-preset-90").click();
+  await expect(page.getByTestId("revisit-date-confirm")).toBeEnabled();
+  await page.getByTestId("revisit-date-confirm").click();
+
+  await expect(modal).toBeHidden();
+  await expect(hold).toContainText("Union Market");
+  await expect(page.getByTestId("toast")).toContainText("Union Market");
+});

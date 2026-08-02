@@ -67,42 +67,60 @@ function row(over: Partial<RevisitDueRow> = {}): RevisitDueRow {
     pipeline: "Commercial",
     stage: "On-Hold",
     value: "$96K",
+    state: "due",
     daysOverdue: 3,
-    daysSilent: 40,
+    daysSilent: 3,
     ...over,
   };
 }
 
 describe("revisitStatus", () => {
   it("counts days past the revisit date", () => {
-    expect(revisitStatus(row({ daysOverdue: 3 }))).toEqual({
+    expect(revisitStatus(row({ daysOverdue: 3 }))).toMatchObject({
       label: "3d past revisit",
       tone: "overdue",
     });
   });
 
   it("treats the day itself as due, not overdue", () => {
-    // Due today is actionable and must appear; only future dates are excluded,
-    // and that exclusion happens in the query rather than here.
-    expect(revisitStatus(row({ daysOverdue: 0 }))).toEqual({
+    // The one distinction this makes and the query does not: `revisitState`
+    // says `due` on the day it falls, but "Due today" and "12d past revisit"
+    // ask different things of the reader.
+    expect(revisitStatus(row({ daysOverdue: 0, daysSilent: 0 }))).toMatchObject({
       label: "Due today",
       tone: "today",
     });
   });
 
-  it("says so in words when nobody ever set a revisit date", () => {
-    // The worse case. Excluding paused stages from neglect assumes a date
-    // replaces the rule; where none was set, nothing replaces anything and the
-    // deal is invisible to both signals. A blank cell would hide exactly that.
-    const status = revisitStatus(row({ daysOverdue: null, daysSilent: 152 }));
+  it("classifies from `state`, never from the number", () => {
+    // `daysOverdue === null` and `state === "no-date"` agree today only
+    // because the query filters the other cases out. Reading the number would
+    // silently disagree with the query the day that boundary moves.
+    const status = revisitStatus(row({ state: "no-date", daysOverdue: null }));
     expect(status.tone).toBe("undated");
-    expect(status.label).toBe("No revisit date · 152d silent");
+    expect(status.label).toBe("No revisit date");
   });
 
   it("does not claim a silence it cannot measure", () => {
-    expect(revisitStatus(row({ daysOverdue: null, daysSilent: null })).label).toBe(
-      "No revisit date · never touched",
+    expect(
+      revisitStatus(
+        row({ state: "no-date", daysOverdue: null, daysSilent: null }),
+      ).note,
+    ).toBe("never touched");
+  });
+
+  it("surfaces the silence when it is the louder number", () => {
+    // A partner 12 days past a revisit is a diary item; the same partner at
+    // 152 days silent is a relationship nobody has tended since spring.
+    expect(revisitStatus(row({ daysOverdue: 12, daysSilent: 152 })).note).toBe(
+      "152d silent",
     );
+  });
+
+  it("stays quiet when the silence adds nothing", () => {
+    // Silence no longer than the overdue count is the same fact twice.
+    expect(revisitStatus(row({ daysOverdue: 12, daysSilent: 12 })).note).toBeNull();
+    expect(revisitStatus(row({ daysOverdue: 12, daysSilent: null })).note).toBeNull();
   });
 });
 
@@ -110,10 +128,10 @@ describe("undatedCount", () => {
   it("counts only the rows with no revisit date", () => {
     expect(
       undatedCount([
-        row({ id: "a", daysOverdue: null }),
+        row({ id: "a", state: "no-date", daysOverdue: null }),
         row({ id: "b", daysOverdue: 0 }),
         row({ id: "c", daysOverdue: 9 }),
-        row({ id: "d", daysOverdue: null }),
+        row({ id: "d", state: "no-date", daysOverdue: null }),
       ]),
     ).toBe(2);
   });

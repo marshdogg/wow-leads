@@ -992,6 +992,23 @@ describe("semantic stages drive neglect", () => {
     expect(isRevisitDue(paused, { revisitDate: null }, now)).toBe(false);
   });
 
+  it("ships the classification, so a row is styled from the decision", () => {
+    // `getRevisitDue` returns `state` alongside `daysOverdue` and the panel
+    // switches on the former. Deriving the tone from the number instead is a
+    // second copy of the rule: equivalent today only because the query filters
+    // negatives out first, and free to drift the moment the "due" boundary
+    // moves. `no-date` and a null count must always agree.
+    const paused = { semanticType: "paused" as const };
+    const now = new Date(2026, 7, 1);
+    expect(revisitState(paused, { revisitDate: null }, now)).toBe("no-date");
+    expect(revisitState(paused, { revisitDate: new Date(2026, 6, 1) }, now)).toBe(
+      "due",
+    );
+    expect(revisitState(paused, { revisitDate: new Date(2026, 9, 1) }, now)).toBe(
+      "scheduled",
+    );
+  });
+
   it("requires a revisit date wherever it excludes a stage from neglect", () => {
     // The two facts have to travel together. Excluding paused from neglect
     // without demanding a date trades a false positive for a false negative,

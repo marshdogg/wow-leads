@@ -7,6 +7,8 @@
  * `lib/repositories/analytics.ts` — its rows satisfy these shapes.
  */
 
+import type { RevisitState } from "@/lib/pipelines";
+
 /* -------------------------------------------------------------------------
    Neglected deals
    ------------------------------------------------------------------------- */
@@ -37,7 +39,16 @@ export function neglectedTotal(rows: readonly NeglectedRow[]): string {
    Revisit due
    ------------------------------------------------------------------------- */
 
-/** Structural mirror of the repository's `RevisitDueDeal`. */
+/**
+ * Structural mirror of the repository's `RevisitDueDeal`.
+ *
+ * `state` is the authority for *what kind of row this is*; the numbers are
+ * only for saying it. The query filters to `no-date` and `due`, so those are
+ * the two that reach here — but this reads `state` rather than inferring the
+ * classification from `daysOverdue` being null, because those agree only
+ * because of an upstream filter, and moving the "due" boundary would leave a
+ * label contradicting the query that produced the row.
+ */
 export interface RevisitDueRow {
   id: string;
   name: string;
@@ -45,7 +56,7 @@ export interface RevisitDueRow {
   pipeline: string;
   stage: string;
   value: string;
-  /** Null when nobody ever set a revisit date. See `revisitStatus`. */
+  state: RevisitState;
   daysOverdue: number | null;
   daysSilent: number | null;
 }
@@ -54,37 +65,54 @@ export interface RevisitStatus {
   label: string;
   /** Undated pauses are the worse case and read louder. */
   tone: "undated" | "overdue" | "today";
+  /** Secondary line, when there is a more alarming number than the primary. */
+  note: string | null;
 }
 
 /**
  * What a paused deal's row says on its right-hand side.
  *
+ * `state` decides whether the row is a problem; this decides how to say it.
+ * The one distinction made here and nowhere upstream is **due today** versus
+ * days past — `revisitState` says `due` on the day it falls, and the query has
+ * no opinion beyond that, but "Due today" and "12d past revisit" ask different
+ * things of the reader.
+ *
  * The undated case is not a missing value to render as "—". Excluding paused
  * stages from neglect assumes a revisit date replaces the rule; where nobody
  * set one, nothing replaces anything and the deal is parked indefinitely,
- * absent from both dashboards. That is the one row on this panel worth
- * chasing, so it says so in words rather than showing a blank.
+ * absent from both dashboards.
  */
 export function revisitStatus(row: RevisitDueRow): RevisitStatus {
-  if (row.daysOverdue === null) {
+  if (row.state === "no-date") {
     return {
-      label:
-        row.daysSilent === null
-          ? "No revisit date · never touched"
-          : `No revisit date · ${row.daysSilent}d silent`,
+      label: "No revisit date",
       tone: "undated",
+      note: row.daysSilent === null ? "never touched" : `${row.daysSilent}d silent`,
     };
   }
-  if (row.daysOverdue === 0) return { label: "Due today", tone: "today" };
+
+  const overdue = row.daysOverdue ?? 0;
   return {
-    label: `${row.daysOverdue}d past revisit`,
-    tone: "overdue",
+    label: overdue === 0 ? "Due today" : `${overdue}d past revisit`,
+    tone: overdue === 0 ? "today" : "overdue",
+    /*
+     * The silence is often the louder number. A partner twelve days past a
+     * revisit is a diary item; the same partner at 152 days silent is a
+     * relationship nobody has tended since spring, and the revisit slipping is
+     * the symptom rather than the story. Shown only when it says something the
+     * primary number doesn't.
+     */
+    note:
+      row.daysSilent !== null && row.daysSilent > overdue
+        ? `${row.daysSilent}d silent`
+        : null,
   };
 }
 
 /** How many of these are parked with no way back. */
 export function undatedCount(rows: readonly RevisitDueRow[]): number {
-  return rows.filter((r) => r.daysOverdue === null).length;
+  return rows.filter((r) => r.state === "no-date").length;
 }
 
 /**

@@ -32,6 +32,7 @@ import {
   revisitState,
   stageCountsForNeglect,
 } from "@/lib/pipelines";
+import type { RevisitState } from "@/lib/pipelines";
 import type {
   Deal,
   DealMetric,
@@ -947,6 +948,14 @@ export interface RevisitDueDeal {
    * on neither dashboard while sitting untouched.
    */
   daysOverdue: number | null;
+  /**
+   * The classification itself, so a caller styles the row from the decision
+   * rather than re-deriving it from the number. `daysOverdue === null` and
+   * `state === "no-date"` say the same thing today; only one of them is the
+   * authority, and moving the "due" boundary must not leave a label
+   * disagreeing with the query that produced the row.
+   */
+  state: RevisitState;
   revisitDate: Date | null;
   /** How long since anyone touched it, for the undated case. */
   daysSilent: number | null;
@@ -998,6 +1007,7 @@ export async function getRevisitDue(now = new Date()): Promise<RevisitDueDeal[]>
 
     const daysOverdue = r.revisitDate ? daysSince(r.revisitDate, now) : null;
     due.push({
+      state,
       id: r.id,
       name: r.name,
       account: r.account,
