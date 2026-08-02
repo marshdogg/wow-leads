@@ -6,7 +6,11 @@ import { moveDealAction } from "@/app/actions/deals";
 import { saveBoardPrefsAction } from "@/app/actions/prefs";
 import { ListTable } from "@/components/list/ListTable";
 import { useUi } from "@/lib/store/ui";
-import { stageLabel, stageRequiresReason } from "@/lib/pipelines";
+import {
+  stageLabel,
+  stageRequiresReason,
+  stageRequiresRevisitDate,
+} from "@/lib/pipelines";
 import type {
   BoardPrefs,
   Deal,
@@ -17,7 +21,8 @@ import type {
   StageId,
 } from "@/lib/types";
 import { BoardColumns } from "./BoardColumns";
-import { LostReasonModal, type LostReasonRequest } from "./LostReasonModal";
+import { LostReasonModal } from "./LostReasonModal";
+import { RevisitDateModal } from "./RevisitDateModal";
 import { BoardHeader } from "./BoardHeader";
 import { KpiStrip, type BoardStat } from "./KpiStrip";
 import { PipelineSelector } from "./PipelineSelector";
@@ -27,6 +32,25 @@ import {
   trackParser,
   viewParser,
 } from "./search-params";
+
+/**
+ * A move a stage will not accept until its question is answered.
+ *
+ * Both answers are carried on one object rather than one per modal, so "what
+ * is still missing" is a property of the move rather than of whichever dialog
+ * happens to be open.
+ */
+interface PendingMove {
+  dealId: string;
+  dealName: string;
+  stageId: StageId;
+  stageLabel: string;
+  needsReason: boolean;
+  needsDate: boolean;
+  lostReason?: LostReason;
+  /** `YYYY-MM-DD`; parsed to a real date at the action boundary. */
+  revisitDate?: string;
+}
 
 /**
  * The board is pipeline-generic: all four pipelines render through this one
@@ -79,10 +103,8 @@ export function BoardScreen({
   const [listSort, setListSort] = useState(prefs.listSort);
   const [pending, startTransition] = useTransition();
 
-  /** The move waiting on a lost reason, or null. See `move`. */
-  const [lostRequest, setLostRequest] = useState<LostReasonRequest | null>(
-    null,
-  );
+  /** The move waiting on an answer, or null. See `move`. */
+  const [pendingMove, setPendingMove] = useState<PendingMove | null>(null);
 
   const stages = pipeline.stages;
   const colKey = (stageId: StageId) => `${pipeline.id}:${stageId}`;
@@ -160,59 +182,81 @@ export function BoardScreen({
 
   /**
    * Every route into a stage passes through here — drag-and-drop today, and
-   * anything added later — which is why the reason gate lives at this level
-   * rather than inside the drag handler.
+   * anything added later — which is why the gates live at this level rather
+   * than inside the drag handler.
+   *
+   * Two stage types ask a question before they will accept a card, and both
+   * are asked *before* the optimistic update. A card that lands in Lost and
+   * then springs back if you cancel reads as a failed drag rather than an
+   * unanswered question, and both answers are load-bearing: the reason is what
+   * the revival trigger fires on, the date is the only thing that brings a
+   * paused deal back after it drops out of the neglect alert.
+   *
+   * A stage can in principle demand both (a franchise setting both flags; no
+   * shipped stage does). The prompts are therefore driven off what is still
+   * missing rather than off which modal is open, so they queue naturally.
    */
   function move(dealId: string, stageId: StageId) {
     const deal = deals.find((d) => d.id === dealId);
-    if (!deal) return;
-
     const target = stages.find((s) => s.id === stageId);
-    if (target && stageRequiresReason(target)) {
-      // Deliberately *before* the optimistic update. A card that lands in Lost
-      // and then springs back if you cancel reads as a failed drag rather than
-      // an unanswered question, and the answer is what the revival trigger
-      // runs on — it deserves a decision, not a dismissal.
-      setLostRequest({
-        dealId,
-        dealName: deal.name,
-        stageId,
-        stageLabel: target.label,
-      });
+    if (!deal || !target) return;
+
+    const request: PendingMove = {
+      dealId,
+      dealName: deal.name,
+      stageId,
+      stageLabel: target.label,
+      needsReason: stageRequiresReason(target),
+      needsDate: stageRequiresRevisitDate(target),
+    };
+
+    if (request.needsReason || request.needsDate) {
+      setPendingMove(request);
       return;
     }
-
-    commitMove(dealId, stageId);
+    commitMove(request);
   }
 
-  function commitMove(
-    dealId: string,
-    stageId: StageId,
-    lostReason?: LostReason,
-  ) {
+  /** Answers gathered so far; commits once nothing is outstanding. */
+  function answer(next: Partial<PendingMove>) {
+    if (!pendingMove) return;
+    const merged = { ...pendingMove, ...next };
+    setPendingMove(merged);
+    const outstanding =
+      (merged.needsReason && !merged.lostReason) ||
+      (merged.needsDate && !merged.revisitDate);
+    if (!outstanding) commitMove(merged);
+  }
+
+  function commitMove(request: PendingMove) {
     const before = deals;
-    const deal = deals.find((d) => d.id === dealId);
+    const deal = deals.find((d) => d.id === request.dealId);
     if (!deal) return;
 
     setDeals((current) =>
-      current.map((d) => (d.id === dealId ? { ...d, stage: stageId } : d)),
+      current.map((d) =>
+        d.id === request.dealId ? { ...d, stage: request.stageId } : d,
+      ),
     );
 
     startTransition(async () => {
       const res = await moveDealAction({
-        dealId,
-        stageId,
-        ...(lostReason ? { lostReason } : {}),
+        dealId: request.dealId,
+        stageId: request.stageId,
+        ...(request.lostReason ? { lostReason: request.lostReason } : {}),
+        ...(request.revisitDate ? { revisitDate: request.revisitDate } : {}),
       });
       if (res.ok) {
         setDeals((current) =>
-          current.map((d) => (d.id === dealId ? res.deal : d)),
+          current.map((d) => (d.id === request.dealId ? res.deal : d)),
         );
-        setLostRequest(null);
+        setPendingMove(null);
         showToast(
-          lostReason
-            ? `${deal.name} marked lost · ${lostReason}`
-            : `${deal.name} → ${stageLabel(pipeline.id, stageId)}`,
+          request.lostReason
+            ? `${deal.name} marked lost · ${request.lostReason}`
+            : request.revisitDate
+              ? `${deal.name} paused until ${request.revisitDate}`
+              : `${deal.name} → ${stageLabel(pipeline.id, request.stageId)}`,
         );
       } else {
         setDeals(before);
@@ -290,18 +334,31 @@ export function BoardScreen({
         )}
       </div>
 
+      {/* Driven off what is still outstanding, so a stage demanding both asks
+          for the reason and then the date without either modal knowing about
+          the other. */}
       <LostReasonModal
-        request={lostRequest}
+        request={
+          pendingMove?.needsReason && !pendingMove.lostReason
+            ? pendingMove
+            : null
+        }
         pending={pending}
-        onConfirm={(reason) => {
-          if (!lostRequest) return;
-          commitMove(
-            lostRequest.dealId,
-            lostRequest.stageId as StageId,
-            reason,
-          );
-        }}
-        onCancel={() => setLostRequest(null)}
+        onConfirm={(lostReason) => answer({ lostReason })}
+        onCancel={() => setPendingMove(null)}
+      />
+
+      <RevisitDateModal
+        request={
+          pendingMove?.needsDate &&
+          !pendingMove.revisitDate &&
+          !(pendingMove.needsReason && !pendingMove.lostReason)
+            ? pendingMove
+            : null
+        }
+        pending={pending}
+        onConfirm={(revisitDate) => answer({ revisitDate })}
+        onCancel={() => setPendingMove(null)}
       />
     </div>
   );

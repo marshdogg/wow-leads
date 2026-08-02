@@ -930,6 +930,35 @@ describe("semantic stages drive neglect", () => {
     expect(lost.lostDaysAgo).toBeGreaterThan(182);
   });
 
+  it("keeps one paused deal overdue so the revisit panel is never empty", () => {
+    // The panel exists to catch the paused half of the board, and every
+    // paused deal having a future date left it demoing its own empty state.
+    // Relative, not a fixed date: a fixed one drifts into "scheduled" as the
+    // seed ages and the panel goes quiet again.
+    const p5 = DEAL_FIXTURES.find((d) => d.id === "p5")!;
+    expect(p5.revisitDaysAgo).toBeGreaterThan(0);
+    expect(p5.revisitDate).toBeUndefined();
+  });
+
+  it("keeps a second paused deal scheduled, so both states show", () => {
+    const c6 = DEAL_FIXTURES.find((d) => d.id === "c6")!;
+    expect(c6.revisitDate).toBe("2027-01-08");
+    expect(c6.revisitDaysAgo).toBeUndefined();
+  });
+
+  it("dates every paused deal exactly one way", () => {
+    // Both set would be ambiguous; neither would violate the rule that entry
+    // to a paused stage requires a date.
+    for (const d of DEAL_FIXTURES) {
+      if (PIPES[d.pipe].stages.find((s) => s.id === d.stage)?.semanticType !== "paused") {
+        continue;
+      }
+      const relative = d.revisitDaysAgo !== undefined;
+      const fixed = d.revisitDate !== undefined;
+      expect({ id: d.id, one: relative !== fixed }).toEqual({ id: d.id, one: true });
+    }
+  });
+
   it("gives the paused commercial bid a real revisit date", () => {
     const c6 = DEAL_FIXTURES.find((d) => d.id === "c6")!;
     expect(c6.stage).toBe("hold");

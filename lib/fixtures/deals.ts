@@ -43,8 +43,13 @@ export interface DealFixture {
   /** Lost stages only. Both are required together — a loss with no reason is a gap. */
   lostReason?: string;
   lostDaysAgo?: number;
-  /** Paused stages only. ISO date the deal comes due again. */
+  /**
+   * Paused stages only — when the deal comes due again. Give a fixed ISO date
+   * for a real business date (a budget cycle), or `revisitDaysAgo` for one
+   * that must stay overdue however long the seed sits.
+   */
   revisitDate?: string;
+  revisitDaysAgo?: number;
 }
 
 export const DEAL_FIXTURES: DealFixture[] = [
@@ -672,11 +677,13 @@ export const DEAL_FIXTURES: DealFixture[] = [
     },
     act: "Log Call",
     quick: true,
-    // Dormant is a paused stage, so neglect no longer watches it. Without a
-    // date this partner was excluded from that alert and generated no revisit
-    // signal either — invisible at 152 days silent. Six weeks out puts it back
-    // on a list and matches the rule paused stages now enforce.
-    revisitDate: "2026-09-14",
+    // Dormant is paused, so neglect no longer watches it — the revisit date is
+    // what makes it actionable instead. Twelve days *overdue*, and relative so
+    // it stays that way: a fixed date would drift into the future-scheduled
+    // case and the revisit panel would demo empty again, which is exactly the
+    // gap this fixture exists to close. c6 covers the quiet scheduled case at
+    // Jan 2027, so the two paused deals show both states between them.
+    revisitDaysAgo: 12,
   },
   {
     /*

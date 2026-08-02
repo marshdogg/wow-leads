@@ -484,7 +484,12 @@ function dealRow(d: DealFixture, latestTouchAt: Date | null, createdAt: Date) {
     resultOutcome: inResult ? (d.osRef ? "booked" : "parked") : null,
     lostReason: d.lostReason ?? null,
     lostAt: d.lostDaysAgo !== undefined ? daysAgo(d.lostDaysAgo) : null,
-    revisitDate: d.revisitDate ? new Date(d.revisitDate) : null,
+    revisitDate:
+      d.revisitDaysAgo !== undefined
+        ? daysAgo(d.revisitDaysAgo)
+        : d.revisitDate
+          ? new Date(d.revisitDate)
+          : null,
     retryAt: inResult
       ? (d.metrics?.find((m) => m.label === "RETRY")?.value ?? null)
       : null,

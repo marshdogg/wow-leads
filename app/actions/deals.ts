@@ -18,7 +18,7 @@ import {
 } from "@/lib/repositories/deals";
 import { getPipelines } from "@/lib/repositories/pipelines";
 import { logTouchpoint } from "@/lib/repositories/touchpoints";
-import { stageRequiresReason } from "@/lib/pipelines";
+import { stageRequiresReason, stageRequiresRevisitDate } from "@/lib/pipelines";
 import { LOST_REASONS, type Deal, type LostReason } from "@/lib/types";
 
 export type ActionResult<T> =
@@ -41,7 +41,25 @@ const moveSchema = z.object({
   stageId: z.string().min(1),
   /** Required when the target stage demands one. See `requireReason`. */
   lostReason: z.enum(LOST_REASONS as [LostReason, ...LostReason[]]).optional(),
+  /** `YYYY-MM-DD`. Required by paused stages. See `requireRevisitDate`. */
+  revisitDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "A revisit date must be a calendar day.")
+    .optional(),
 });
+
+/**
+ * `YYYY-MM-DD` → a real date, at local midday.
+ *
+ * Not `new Date("2026-09-14")`, which parses as UTC midnight and therefore
+ * lands on the 13th for every viewer west of Greenwich — including every WOW
+ * franchise. A revisit date is a calendar day somebody picked, so it is
+ * anchored away from both midnights.
+ */
+function parseRevisitDate(day: string): Date {
+  const [y, m, d] = day.split("-").map(Number);
+  return new Date(y, m - 1, d, 12, 0, 0, 0);
+}
 
 /**
  * Refuses a move into a reason-requiring stage that has no reason.
@@ -55,19 +73,33 @@ const moveSchema = z.object({
  * Reads the stage rows rather than the compile-time union so a franchise's own
  * stage, or one flagged `requiresReason` on a non-lost stage, behaves the same.
  */
-async function requireReason(
+async function requireAnswers(
   stageId: string,
   lostReason: LostReason | undefined,
+  revisitDate: string | undefined,
 ): Promise<string | null> {
-  if (lostReason) return null;
-
   const pipelines = await getPipelines();
   const stage = pipelines
     .flatMap((p) => p.stages)
     .find((s) => s.id === stageId);
-  if (!stage || !stageRequiresReason(stage)) return null;
+  if (!stage) return null;
 
-  return `Moving to ${stage.label} needs a reason — it is what the revival trigger reads later.`;
+  if (!lostReason && stageRequiresReason(stage)) {
+    return `Moving to ${stage.label} needs a reason — it is what the revival trigger reads later.`;
+  }
+
+  /*
+   * A paused stage drops the deal out of the neglect alert, and the revisit
+   * date is the only thing that brings it back. Without one it appears on
+   * neither the neglected list nor the revisit list — invisible rather than
+   * merely quiet, which is a worse trade than the false positive the
+   * exclusion was built to remove.
+   */
+  if (!revisitDate && stageRequiresRevisitDate(stage)) {
+    return `Pausing into ${stage.label} needs a revisit date — without one it drops off the neglect alert and never reappears.`;
+  }
+
+  return null;
 }
 
 export async function moveDealAction(
@@ -76,9 +108,10 @@ export async function moveDealAction(
   const parsed = moveSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: "Invalid move request." };
 
-  const missing = await requireReason(
+  const missing = await requireAnswers(
     parsed.data.stageId,
     parsed.data.lostReason,
+    parsed.data.revisitDate,
   );
   if (missing) return { ok: false, error: missing };
 
@@ -93,6 +126,9 @@ export async function moveDealAction(
       dealId: parsed.data.dealId,
       stageId: parsed.data.stageId,
       lostReason: parsed.data.lostReason ?? null,
+      revisitDate: parsed.data.revisitDate
+        ? parseRevisitDate(parsed.data.revisitDate)
+        : null,
       actorUserId: getCurrentUser().id,
     });
     revalidateBoard(deal.id);

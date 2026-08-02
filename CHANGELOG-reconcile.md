@@ -64,9 +64,15 @@ Stage count 19 → 30. Deal count 32 → 33.
 ## Neglected-deals count
 
 **4**, from `getNeglectedDeals()`: `r11` (22d), `b4` (21d), `r4` (19d),
-`n2` (1d, against the New Leads one-day threshold). Every paused deal now
-carries a revisit date and every lost deal a reason, so no deal sits on
-neither list.
+`n2` (1d, against the New Leads one-day threshold).
+
+Every paused deal now carries a revisit date and every lost deal a reason, so
+**no deal is unwatched**. That is a claim about coverage, not about list
+membership — `p5` is on neither list today, because its revisit date is six
+weeks out and a deal parked with a date is *supposed* to be quiet until the
+date arrives. An earlier draft of this note said "no deal sits on neither
+list", which is testable and false; the `scheduled` state exists precisely to
+express the difference.
 
 Previously 3. The membership changed more than the number: `p5` dropped out
 under the new `paused` exclusion, and `r11` and `n2` entered from fixtures
